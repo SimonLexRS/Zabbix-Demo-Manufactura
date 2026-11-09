@@ -121,27 +121,42 @@ export class UI {
   renderProblems(s) {
     const cat = s.problemCatalog || [];
     const active = cat.filter((p) => p.state > 0).length;
+    const label = `Problemas${active ? ` <span class="count on">${active}</span>` : ''}`;
     const btn = $('#btnProblems');
-    btn.innerHTML = `Problemas${active ? ` <span class="count on">${active}</span>` : ''}`;
-    const sig = `${s.randomFaults}|${cat.map((p) => `${p.state}:${p.leftMin ?? ''}`).join(',')}`;
-    if (sig === this.probSig) return;
-    this.probSig = sig;
-    const ORIGIN = ['', 'Manual · hasta desactivarla', 'Aleatoria'];
-    $('#faultList').innerHTML = `
-      <div class="pp-head">
-        <b>Puntos problemáticos</b>
-        <button id="randomToggle" class="switch-row" type="button" aria-pressed="${!!s.randomFaults}">
-          <span>Fallas aleatorias</span><i class="switch ${s.randomFaults ? 'on' : ''}"></i>
-        </button>
-      </div>
-      ${cat
-        .map((p) => {
-          const meta = p.state === 2 ? `Aleatoria · se resuelve en ${p.leftMin} min` : p.state === 1 ? `${ORIGIN[1]} · ${p.sinceMin} min` : esc(p.desc);
-          return `<button type="button" class="pp sev-${SEV_CLASS[p.sev]} ${p.state ? 'on' : ''}" data-problem="${p.id}" data-state="${p.state}" title="${esc(p.desc)}">
-            <i class="dot"></i><span class="pp-txt"><b>${esc(p.name)}</b><small>${meta}</small></span><i class="switch ${p.state ? 'on' : ''}"></i></button>`;
-        })
-        .join('')}
-      <button id="clearProblems" type="button" class="menu-item ok"${active ? '' : ' disabled'}><b>Desactivar todos</b><span>Normaliza manuales y aleatorias</span></button>`;
+    if (btn.innerHTML !== label) btn.innerHTML = label;
+    const list = $('#faultList');
+    // Build the rows once; afterwards only update them in place so clicks are never lost.
+    const ids = cat.map((p) => p.id).join(',');
+    if (list.dataset.ids !== ids) {
+      list.dataset.ids = ids;
+      list.innerHTML = `
+        <div class="pp-head">
+          <b>Puntos problemáticos</b>
+          <button id="randomToggle" class="switch-row" type="button"><span>Fallas aleatorias</span><i class="switch"></i></button>
+        </div>
+        ${cat
+          .map(
+            (p) => `<button type="button" class="pp sev-${SEV_CLASS[p.sev]}" data-problem="${p.id}" data-state="0" title="${esc(p.desc)}">
+              <i class="dot"></i><span class="pp-txt"><b>${esc(p.name)}</b><small></small></span><i class="switch"></i></button>`,
+          )
+          .join('')}
+        <button id="clearProblems" type="button" class="menu-item ok"><b>Desactivar todos</b><span>Normaliza manuales y aleatorias</span></button>`;
+    }
+    const rnd = $('#randomToggle');
+    rnd.setAttribute('aria-pressed', String(!!s.randomFaults));
+    rnd.querySelector('.switch').classList.toggle('on', !!s.randomFaults);
+    for (const p of cat) {
+      const row = list.querySelector(`[data-problem="${p.id}"]`);
+      if (!row) continue;
+      row.dataset.state = String(p.state);
+      row.classList.toggle('on', p.state > 0);
+      row.querySelector('.switch').classList.toggle('on', p.state > 0);
+      row.setAttribute('aria-pressed', String(p.state > 0));
+      const meta = p.state === 2 ? `Aleatoria · se resuelve en ${p.leftMin} min` : p.state === 1 ? `Manual · activa hace ${p.sinceMin} min (hasta desactivarla)` : p.desc;
+      const small = row.querySelector('small');
+      if (small.textContent !== meta) small.textContent = meta;
+    }
+    $('#clearProblems').disabled = !active;
   }
 
   renderZabbix(s) {
@@ -224,7 +239,7 @@ export class UI {
     const list = $('#feedList');
     if (this.feedTab === 'problems') {
       if (!s.problems.length) {
-        list.innerHTML = '<div class="empty">Sin problemas activos. Usa <b>Simular falla</b> para probar los triggers de Zabbix.</div>';
+        list.innerHTML = '<div class="empty">Sin problemas activos. Usa <b>Problemas</b> para activar fallas y probar los triggers de Zabbix.</div>';
         return;
       }
       list.innerHTML = [...s.problems]

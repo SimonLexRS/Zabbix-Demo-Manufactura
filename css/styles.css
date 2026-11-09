@@ -87,13 +87,13 @@ button { font: inherit; color: inherit; }
 .ev i { flex: none; width: 4px; align-self: stretch; border-radius: 2px; background: var(--sev-info); }
 .ev b { display: block; font-weight: 500; font-size: 12.5px; }
 .ev small { color: var(--muted); font-size: 11px; font-family: var(--mono); }
-.sev-info i { background: var(--sev-info); }
-.sev-warning i { background: var(--sev-warning); }
-.sev-average i { background: var(--sev-average); }
-.sev-high i { background: var(--sev-high); }
-.sev-disaster i { background: var(--sev-disaster); }
-.k-resuelto i { background: var(--ok); }
-.k-evento.sev-info i, .k-mantenimiento i { background: #5d6b78; }
+.ev.sev-info i { background: var(--sev-info); }
+.ev.sev-warning i { background: var(--sev-warning); }
+.ev.sev-average i { background: var(--sev-average); }
+.ev.sev-high i { background: var(--sev-high); }
+.ev.sev-disaster i { background: var(--sev-disaster); }
+.ev.k-resuelto i { background: var(--ok); }
+.ev.k-evento.sev-info i, .ev.k-mantenimiento i { background: #5d6b78; }
 .empty { color: var(--muted); padding: 12px 8px; font-size: 12.5px; }
 .empty b { color: var(--text); }
 
@@ -209,4 +209,11 @@ button.icon:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
   .problems-pop { width: auto; }
   .zbx { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80vw; }
   .kpis { top: 92px; }
+}
+
+/* Medium widths: KPIs go below the title block instead of overlapping it. */
+@media (min-width: 861px) and (max-width: 1180px) {
+  .kpis { left: 14px; top: 96px; }
+  .details { top: 218px; max-height: calc(100vh - 300px); }
+  .toast { top: 220px; }
 }
