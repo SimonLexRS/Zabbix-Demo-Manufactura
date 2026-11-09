@@ -10,6 +10,10 @@
 // earlier versions of the app (correlation.*) is removed.
 
 export const PREFIX = 'Planta Aceitera · ';
+// Several plants can share one Zabbix: rules are scoped by the plant's host group. The default
+// group keeps the plain names; any other group gets " [<group>]" at the end.
+export const scopeSuffix = (group) => (!group || group === 'Manufactura' ? '' : ` [${group}]`);
+const owns = (name, suffix) => name.startsWith(PREFIX) && (suffix ? name.endsWith(suffix) : !/ \[[^\]]+\]$/.test(name));
 export const LEGACY_CORRELATION = 'Planta Aceitera: la causa raíz cierra los síntomas';
 
 // API codes (Zabbix 8.0 ceprule object).
@@ -79,7 +83,7 @@ function incidentOps({ name, severity, tag, causeFilter }) {
 }
 
 // The plant's CEP rules. `groups`: host groups of the plant host and the IoT devices.
-export function buildRules({ groups }) {
+export function buildRules({ groups, suffix = '' }) {
   const responsable = [
     [['recepcion', 'despacho'], 'Jefe de producción'],
     [['extraccion', 'transito'], 'Jefe de seguridad (HSE)'],
@@ -88,7 +92,7 @@ export function buildRules({ groups }) {
   ];
   return [
     {
-      name: `${PREFIX}Enriquecer: responsable por área`,
+      name: `${PREFIX}Enriquecer: responsable por área${suffix}`,
       description: 'Sin ventana: a cada evento de la planta le pone el tag "responsable" según su área, para filtrar y notificar en Zabbix.',
       sortorder: 1, stop: 0, window_type: WIN.none, window: window(),
       filter: plantFilter(groups, [{ type: C.tagName, tag: 'area' }]),
@@ -96,7 +100,7 @@ export function buildRules({ groups }) {
         op({ sortorder: i + 1, when: WHEN.occurred, type: T.setTag, filter: filter(areas.map((a) => tagIs('area', a)), areas.map((_, k) => LETTERS[k]).join(' or ')), fields: { tag: 'responsable', tag_value: who } })),
     },
     {
-      name: `${PREFIX}Casi accidentes repetidos`,
+      name: `${PREFIX}Casi accidentes repetidos${suffix}`,
       description: 'Ventana causa/síntomas de 15 min: se queda con el primer casi accidente y cierra los repetidos apenas entran en la ventana; el tag "repeticiones" cuenta cuántos hubo.',
       sortorder: 2, stop: 1, window_type: WIN.cause, window: window({ duration: '15m', group_by_host: 1, event_count_tag: 'repeticiones' }),
       filter: plantFilter(groups, [tagIs('problema', 'casi_accidente')]),
@@ -105,7 +109,7 @@ export function buildRules({ groups }) {
       operations: [op({ sortorder: 1, when: WHEN.added, type: T.close, filter: filter([flag(C.symptom, true)]) })],
     },
     {
-      name: `${PREFIX}Causa y síntomas por área`,
+      name: `${PREFIX}Causa y síntomas por área${suffix}`,
       description: 'Ventana causa/síntomas de 45 min por área: la primera falla del área es la causa y lo que aparece después en esa área son sus síntomas (tag "sintomas" con la cantidad). Si la ventana la abre un síntoma, se cierra para esperar una causa real; cuando la causa se resuelve, la ventana se cierra y la próxima falla del área abre otra.',
       sortorder: 3, stop: 0, window_type: WIN.cause, window: window({ duration: '45m', group_by_host: 1, group_by_tags: 1, tags: ['area'], event_count_tag: 'sintomas' }),
       filter: plantFilter(groups, [{ type: C.tagName, tag: 'rol' }, tagIs('problema', 'casi_accidente', OP.notEquals)]),
@@ -116,7 +120,7 @@ export function buildRules({ groups }) {
       ],
     },
     {
-      name: `${PREFIX}Incidente de seguridad en extracción`,
+      name: `${PREFIX}Incidente de seguridad en extracción${suffix}`,
       description: 'Patrón (15 min): fuga de hexano abierta con LEL sobre el límite o evacuación → la fuga pasa a "INCIDENTE" con severidad Desastre.',
       sortorder: 4, stop: 0, window_type: WIN.pattern,
       window: window({ duration: '15m', group_by_host: 1, script: patternScript("p === 'hexane_leak'", ['lel_alto', 'evacuacion']) }),
@@ -124,7 +128,7 @@ export function buildRules({ groups }) {
       operations: incidentOps({ name: 'INCIDENTE: fuga de hexano con riesgo de explosión (LEL / evacuación)', severity: 5, tag: 'seguridad_extraccion', causeFilter: [tagIs('problema', 'hexane_leak')] }),
     },
     {
-      name: `${PREFIX}Bloqueo vial interno`,
+      name: `${PREFIX}Bloqueo vial interno${suffix}`,
       description: 'Patrón (20 min): colisión abierta con tránsito detenido o cola en RN4 → la colisión pasa a "INCIDENTE" con severidad Desastre.',
       sortorder: 5, stop: 0, window_type: WIN.pattern,
       window: window({ duration: '20m', group_by_host: 1, script: patternScript("p === 'vehicle_collision'", ['transito_detenido', 'cola_rn4']) }),
@@ -132,7 +136,7 @@ export function buildRules({ groups }) {
       operations: incidentOps({ name: 'INCIDENTE: bloqueo vial interno (colisión con tránsito detenido)', severity: 5, tag: 'bloqueo_vial', causeFilter: [tagIs('problema', 'vehicle_collision')] }),
     },
     {
-      name: `${PREFIX}Recepción paralizada`,
+      name: `${PREFIX}Recepción paralizada${suffix}`,
       description: 'Patrón (30 min): una falla de recepción con 2 o más síntomas (camiones detenidos, cola en RN4) → la falla queda marcada incidente=recepcion_paralizada con severidad Alta.',
       sortorder: 6, stop: 0, window_type: WIN.pattern,
       window: window({ duration: '30m', group_by_host: 1, script: patternScript("tag(ev[i], 'rol') === 'causa'", ['camion_detenido', 'cola_rn4'], 2) }),
@@ -140,7 +144,7 @@ export function buildRules({ groups }) {
       operations: incidentOps({ severity: 4, tag: 'recepcion_paralizada', causeFilter: [tagIs('rol', 'causa')] }),
     },
     {
-      name: `${PREFIX}Pérdida de vapor afecta la molienda`,
+      name: `${PREFIX}Pérdida de vapor afecta la molienda${suffix}`,
       description: 'Patrón (30 min): disparo de caldera con presión de vapor baja o molienda baja → la caldera pasa a "INCIDENTE" con severidad Alta.',
       sortorder: 7, stop: 0, window_type: WIN.pattern,
       window: window({ duration: '30m', group_by_host: 1, script: patternScript("p.indexOf('boiler_') === 0", ['vapor_bajo', 'molienda_baja']) }),
@@ -151,7 +155,8 @@ export function buildRules({ groups }) {
 }
 
 // Creates / updates / deletes the managed rules and removes the legacy correlation.
-export async function applyCep(rpc, { groups, enable = true }) {
+export async function applyCep(rpc, { groups, enable = true, scope = groups?.[0] }) {
+  const suffix = scopeSuffix(scope);
   const out = { state: 'activa', rules: [], legacyRemoved: false };
   try {
     const legacy = await rpc('correlation.get', { filter: { name: [LEGACY_CORRELATION] }, output: ['correlationid'] });
@@ -162,9 +167,9 @@ export async function applyCep(rpc, { groups, enable = true }) {
   } catch {
     // correlation.* may be gone in later versions: nothing to remove.
   }
-  const current = await rpc('ceprule.get', { output: ['cep_ruleid', 'name'], search: { name: PREFIX }, startSearch: true });
+  const current = (await rpc('ceprule.get', { output: ['cep_ruleid', 'name'], search: { name: PREFIX }, startSearch: true })).filter((r) => owns(r.name, suffix));
   const byName = new Map(current.map((r) => [r.name, r.cep_ruleid]));
-  const wanted = enable ? buildRules({ groups }) : [];
+  const wanted = enable ? buildRules({ groups, suffix }) : [];
   for (const rule of wanted) {
     const id = byName.get(rule.name);
     const body = { ...rule, status: 0 };
@@ -173,17 +178,18 @@ export async function applyCep(rpc, { groups, enable = true }) {
     byName.delete(rule.name);
   }
   if (byName.size) await rpc('ceprule.delete', [...byName.values()]);
-  out.rules = await cepStatus(rpc);
+  out.rules = await cepStatus(rpc, scope);
   if (!enable) out.state = 'deshabilitada';
   else if (out.rules.some((r) => r.error)) out.state = 'con errores';
   return out;
 }
 
 // Managed rules as Zabbix sees them (status and processing error).
-export async function cepStatus(rpc) {
-  const rules = await rpc('ceprule.get', { output: ['cep_ruleid', 'name', 'status', 'error', 'window_type', 'sortorder'], search: { name: PREFIX }, startSearch: true, sortfield: 'sortorder' });
+export async function cepStatus(rpc, scope) {
+  const suffix = scopeSuffix(scope);
+  const rules = (await rpc('ceprule.get', { output: ['cep_ruleid', 'name', 'status', 'error', 'window_type', 'sortorder'], search: { name: PREFIX }, startSearch: true, sortfield: 'sortorder' })).filter((r) => owns(r.name, suffix));
   const kind = { 0: 'evento', 1: 'ventana simple', 2: 'causa y síntomas', 3: 'ventana simple', 4: 'patrón' };
-  return rules.map((r) => ({ id: r.cep_ruleid, name: r.name.slice(PREFIX.length), enabled: r.status === '0', error: r.error || '', kind: kind[r.window_type] || r.window_type }));
+  return rules.map((r) => ({ id: r.cep_ruleid, name: r.name.slice(PREFIX.length, suffix ? -suffix.length : undefined), enabled: r.status === '0', error: r.error || '', kind: kind[r.window_type] || r.window_type }));
 }
 
 // What the CEP did with the plant's open problems: causes with their symptoms, incidents

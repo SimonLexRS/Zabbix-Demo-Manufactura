@@ -70,13 +70,14 @@ export async function provision(rpc, cfg, { templateFile, iotTemplateFile }) {
     description: 'Gemelo digital de planta aceitera (acopio y molienda de soya). Datos por Zabbix sender. https://github.com/SimonLexRS/Zabbix-Demo-Manufactura',
   });
 
-  // IoT devices: one host each; disabled devices (or IoT off) are left unmonitored.
+  // IoT devices: one host each; disabled devices (or IoT off) are left unmonitored. Visible
+  // names are unique in Zabbix, so another plant (other prefix) adds its own name.
   const iotGroupid = await ensureGroup(rpc, cfg.iot.group);
   const iot = { created: 0, updated: 0, disabled: 0 };
   for (const d of cfg.iotDevices) {
     const on = cfg.iot.enabled && d.enabled;
     const r = await upsertHost(rpc, {
-      host: `${cfg.iot.hostPrefix}${d.id}`, name: `IoT · ${d.name}`, groupid: iotGroupid, templateid: iotTpl, macros, status: on ? 0 : 1,
+      host: `${cfg.iot.hostPrefix}${d.id}`, name: cfg.iot.hostPrefix === 'iot-' ? `IoT · ${d.name}` : `IoT · ${d.name} (${cfg.zabbix.host})`, groupid: iotGroupid, templateid: iotTpl, macros, status: on ? 0 : 1,
       tags: [{ tag: 'site', value: 'planta-aceitera' }, { tag: 'iot-type', value: d.type }, { tag: 'asset', value: d.asset }],
       description: `${d.type} · activo ${d.asset}. Dispositivo IoT simulado que reporta por Zabbix sender.`,
     });

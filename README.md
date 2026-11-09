@@ -2,12 +2,12 @@
 
 Gemelo digital 3D (Three.js) de una planta de **acopio y molienda de soya**: recepción de camiones por RN4, calado, pesaje, volcadoras, norias, silos y galpones, preparación, **extracción por hexano**, **sala de fuerza** (calderas/vapor), tanques de aceite, galpón de harina y despacho.
 
-La simulación corre en el **servidor** y expone **métricas para Zabbix** (HTTP agent + LLD) y Prometheus. El navegador solo dibuja el estado en vivo.
+La simulación corre en el **servidor**. Al desplegar da de alta todo en Zabbix (templates, hosts, CEP y dashboard) y envía los datos por la API de Zabbix, con solo `ZABBIX_URL` + `ZABBIX_API_TOKEN`. También expone `/api/metrics` (HTTP agent) y `/metrics` (Prometheus). El navegador solo dibuja el estado en vivo.
 
 ```mermaid
 flowchart LR
   SIM["Simulación (Node)<br/>motor por ticks · A* · proceso · triggers"] -->|SSE 5 Hz + gzip| WEB["Cliente 3D Three.js<br/>interpolación · picking · HUD"]
-  SIM -->|"/api/metrics (HTTP agent)"| ZBX["Zabbix<br/>ítems dependientes · LLD · triggers"]
+  SIM -->|"API: alta (templates, hosts, CEP, dashboard) + history.push"| ZBX["Zabbix 7.0+ / 8.0<br/>trapper · LLD · triggers · CEP"]
   SIM -->|"/metrics"| PROM["Prometheus (opcional)"]
   WEB -->|"POST /api/control (velocidad, fallas)"| SIM
 ```
@@ -110,7 +110,7 @@ Los síntomas ya **no dependen** de su causa: antes las dependencias impedían q
 | Pérdida de vapor afecta la molienda | patrón 30 min | disparo de caldera con vapor bajo o molienda baja → "INCIDENTE: …" con severidad Alta |
 
 - **En la app**: el feed *Problemas* muestra "Correlación en Zabbix (CEP)", con causas, síntomas, incidentes y repeticiones leídos de Zabbix cada 10 s.
-- **En el dashboard**: la página "CEP de Zabbix" (`tools/create-zabbix-dashboard.mjs`) muestra incidentes, causas con síntomas y responsable.
+- **En el dashboard**: la página "CEP de Zabbix" (creada automáticamente) muestra incidentes, causas con síntomas y responsable.
 - **Para desactivarlo**: `ZABBIX_CEP=0` o el interruptor del panel.
 
 ## Sala de monitoreo
@@ -159,27 +159,52 @@ Las oficinas (`OFI`) son ahora **"Oficinas y sala de monitoreo"**:
   - cierre de la OT = mensaje.
 - **CEP**: reglas nuevas *Bloqueo vial interno* y *Falla sin técnico asignado*.
 
-## Envío a Zabbix con Zabbix sender (push)
+## Replicar en otro Zabbix y otro Dokploy (solo URL + API key)
 
-Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 s)** todos los datos de estado y cantidad (≈170 valores: planta, silos, tanques, calderas, estaciones y problemas) a los **ítems trapper** del host `ZABBIX_HOST`, con el protocolo nativo de Zabbix sender (TCP 10051, cabecera `ZBXD`). Las reglas LLD se envían al arrancar y cada 10 min. Al cambiar un problema se envía al instante. El estado del envío (`processed` / `failed`) se ve en la vista 3D y en `GET /api/zabbix/status`.
+Solo hacen falta dos variables. Todo lo demás se crea solo al desplegar.
 
-**Alta automática**: con `ZABBIX_API_URL` y `ZABBIX_API_TOKEN` la app importa `zabbix/template_planta_aceitera_sender.yaml` (**Planta Aceitera Demo by Zabbix sender**), crea el grupo `Manufactura` y el host `Planta Aceitera` con el template. Reintenta cada 60 s si falla. El token se crea en Zabbix → *User settings → API tokens* (usuario con permiso para importar templates y crear hosts).
+1. **Token en Zabbix** (7.0 o superior; el CEP nativo requiere 8.0): *Usuarios → Tokens de API → Crear token*, para un usuario **Super admin**. Hace falta para importar templates y crear las reglas CEP.
+2. **App Compose en Dokploy**: *Create Service → Compose*, fuente **Git** `https://github.com/SimonLexRS/Zabbix-Demo-Manufactura.git`, rama `main`, ruta `./docker-compose.yml`.
+3. **Environment**:
+   ```
+   ZABBIX_URL=https://zabbix.midominio.com
+   ZABBIX_API_TOKEN=<token>
+   CONTROL_TOKEN=<clave del panel>
+   ```
+   `ZABBIX_URL` puede ser la URL pública o la interna (`http://zabbix-web:8080`), siempre que el contenedor llegue a ella. Si la interna no es accesible desde el navegador, define `ZABBIX_WEB_URL` con la pública (link del dashboard).
+4. **Domains**: servicio `planta`, puerto `8080`. **Deploy**.
+5. **Al iniciar**, la app hace todo esto. Reintenta con espera creciente si Zabbix todavía está arrancando:
+   - espera a la API y verifica la versión y el token;
+   - importa los templates **Planta Aceitera Demo by Zabbix sender** y **Planta Aceitera IoT device by Zabbix sender**;
+   - crea el grupo `Manufactura` y el host `Planta Aceitera`;
+   - crea el grupo `Manufactura/IoT` y los 15 hosts `iot-*`;
+   - crea las **reglas CEP** (Zabbix 8.0);
+   - crea el **dashboard** *Planta Aceitera · Estado y CEP*;
+   - empieza a enviar los datos y las reglas LLD.
+6. **Verificación**: *Configuración → Zabbix → Estado*, o `https://TU-DOMINIO/api/zabbix/status`.
 
-**Allowed hosts de los trapper**: Zabbix 8.0 trae la macro global `{$TRAPPER.ALLOWED_HOSTS}` = `127.0.0.1,::1`, que rechaza envíos desde contenedores. El template sender la redefine con las redes privadas de Docker (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`); puedes restringirla más en las macros del host.
+Es idempotente: cada reinicio o *Re-provisionar* actualiza lo que ya existe sin duplicar nada. No toca templates, hosts, dashboards ni reglas CEP con otros nombres.
+
+**Cómo viajan los datos.** Cada `ZABBIX_SEND_INTERVAL` s (10 s), la app envía todos los valores de estado y cantidad (≈190: planta, silos, tanques, calderas, estaciones, problemas e IoT) por la **API de Zabbix** (`history.push`, Zabbix 7.0+) a los ítems trapper. Las reglas LLD se envían al arrancar y cada 10 min. No hace falta el puerto 10051 ni compartir red Docker con Zabbix.
+
+**Envío por Zabbix sender (opcional).** Con `ZABBIX_TRANSPORT=sender` y `ZABBIX_SERVER`/`ZABBIX_PORT`, la app usa el protocolo nativo (TCP 10051). El trapper tiene que ser accesible desde el contenedor.
+
+**Allowed hosts de los trapper.** Zabbix trae `{$TRAPPER.ALLOWED_HOSTS}` = `127.0.0.1,::1`. Con `history.push`, Zabbix valida la IP del **frontend**; con sender, la del contenedor. Los templates redefinen la macro con las redes privadas de Docker (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`). Si tu frontend usa una IP pública, ajústala con `ZABBIX_TRAPPER_ALLOWED_HOSTS`.
 
 | Variable | Default | Uso |
 |---|---|---|
-| `ZABBIX_SERVER` | — (en compose: `zabbix-server`) | Server/proxy que recibe el sender |
-| `ZABBIX_PORT` | `10051` | Puerto trapper |
-| `ZABBIX_HOST` | `Planta Aceitera` | Nombre técnico del host en Zabbix |
-| `ZABBIX_SEND_INTERVAL` | `10` | Segundos entre envíos |
-| `ZABBIX_API_URL` | (compose: `http://zabbix-web:8080/api_jsonrpc.php`) | API para el alta automática |
-| `ZABBIX_API_TOKEN` | — | Token de API de Zabbix |
+| `ZABBIX_URL` | — | **URL de Zabbix** (frontend): de ella salen la API y el link al dashboard |
+| `ZABBIX_API_TOKEN` | — | **Token de API** (Super admin) |
+| `ZABBIX_WEB_URL` | = `ZABBIX_URL` | URL pública para abrir el dashboard desde la sala de monitoreo |
+| `ZABBIX_HOST` | `Planta Aceitera` | Nombre técnico del host (y del dashboard) |
 | `ZABBIX_HOST_GROUP` | `Manufactura` | Grupo del host |
-| `ZABBIX_NETWORK` | `zabbix-testing-lab01-mybwkj_default` | Red Docker del stack de Zabbix (solo compose) |
+| `ZABBIX_SEND_INTERVAL` | `10` | Segundos entre envíos |
+| `ZABBIX_TLS_INSECURE` | `0` | `1` = aceptar certificados autofirmados |
+| `ZABBIX_TRANSPORT` | `api` | `sender` = protocolo Zabbix sender al trapper |
+| `ZABBIX_SERVER` / `ZABBIX_PORT` | — / `10051` | Solo con `ZABBIX_TRANSPORT=sender` |
+| `ZABBIX_API_URL` | — | Compatibilidad: URL completa de la API (si no se usa `ZABBIX_URL`) |
 | `RANDOM_FAULTS` | `0` | `1` = fallas aleatorias e incidentes viales automáticos |
 | `TECHS_REPAIR_MANUAL` | `0` | `1` = los técnicos también cierran las fallas manuales |
-| `ZABBIX_WEB_URL` | — | URL pública de Zabbix: el muro de la sala de monitoreo abre el dashboard real |
 | `COLLISIONS` | `1` | `0` = sin colisiones (los conductores siempre frenan) |
 | `ROAD_INCIDENTS` | `8` | incidentes viales (falla de frenos / conductor distraído) por día simulado con fallas aleatorias activas; `0` = solo manuales |
 | `ZABBIX_ACK` | `1` | `0` = no registrar acciones del personal en Zabbix |
@@ -189,14 +214,9 @@ Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 
 | `DATA_DIR` | `/app/data` | Dónde se guarda la configuración del panel |
 | `IOT_ENABLED` | `1` | `0` = no enviar dispositivos IoT |
 
-## Despliegue en Dokploy (Compose, junto al stack de Zabbix)
+## Despliegue en Dokploy
 
-1. En el proyecto donde corre Zabbix: **Create Service → Compose**, fuente **Git** `https://github.com/SimonLexRS/Zabbix-Demo-Manufactura.git`, rama `main`, ruta `./docker-compose.yml`.
-2. **Environment**: `ZABBIX_NETWORK=<appName del compose de Zabbix>_default` y `ZABBIX_API_TOKEN=...` (el resto tiene defaults).
-3. **Domains**: servicio `planta`, puerto `8080`.
-4. **Deploy** y verifica `https://TU-DOMINIO/healthz` y `https://TU-DOMINIO/api/zabbix/status`.
-
-No hay dependencias npm (`node:20-alpine`). El estado se reinicia en cada despliegue.
+Ver [Replicar en otro Zabbix y otro Dokploy](#replicar-en-otro-zabbix-y-otro-dokploy-solo-url--api-key): `ZABBIX_URL` + `ZABBIX_API_TOKEN`, el dominio y el deploy. No hay dependencias npm (`node:20-alpine`). La configuración del panel se guarda en el volumen `planta-data`.
 
 ## Alternativa: Zabbix por HTTP agent (pull)
 
@@ -206,7 +226,7 @@ En el panel de detalle del cliente 3D cada métrica muestra su **clave de ítem 
 
 Para regenerar los templates después de cambiar métricas: `node tools/gen-zabbix-template.mjs`.
 
-**Dashboard en Zabbix**: `ZABBIX_URL=https://tu-zabbix ZABBIX_API_TOKEN=... node tools/create-zabbix-dashboard.mjs` crea (o actualiza) el dashboard *Planta Aceitera · Estado y CEP* con dos páginas: **Estado de planta** (KPIs con umbrales, medidores de vapor/molienda/LEL, problemas activos, tendencias de molienda y vapor, niveles de silos, stocks, tránsito y mantenimiento) y **CEP y correlación** (reglas activas, último evento compuesto, eventos CEP, causas raíz, síntomas, problemas por severidad, reglas CEP en el tiempo, órdenes de trabajo y tránsito).
+**Dashboard en Zabbix**: se crea solo en cada provisión (`server/zabbix-dashboard.js`). A mano: `ZABBIX_URL=https://tu-zabbix ZABBIX_API_TOKEN=... node tools/create-zabbix-dashboard.mjs`. Crea (o actualiza) el dashboard *Planta Aceitera · Estado y CEP* con dos páginas: **Estado de planta** (KPIs con umbrales, medidores de vapor/molienda/LEL, problemas activos, tendencias de molienda y vapor, niveles de silos, stocks, tránsito y mantenimiento) y **CEP y correlación** (reglas activas, último evento compuesto, eventos CEP, causas raíz, síntomas, problemas por severidad, reglas CEP en el tiempo, órdenes de trabajo y tránsito).
 
 ## Estructura
 

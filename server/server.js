@@ -33,17 +33,20 @@ import { IOT_DEVICES } from '../js/sim/iot.js';
 import { DEFAULT_RULES, CEP_METRICS } from '../js/sim/cep.js';
 import { PROBLEMS } from '../js/sim/problems.js';
 import { sendValues } from './zabbix-sender.js';
+import { pushValues } from './zabbix-push.js';
 import { makeRpc, provision } from './zabbix-provision.js';
 import { applyCep, cepStatus, cepResults } from './zabbix-cep.js';
+import { upsertDashboard } from './zabbix-dashboard.js';
 import { ZabbixAck } from './zabbix-ack.js';
 import { ConfigStore } from './config.js';
 import { encodeFrame, urgentSignature } from '../js/sim/frames.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
+// Self-signed certificate on the target Zabbix (ZABBIX_TLS_INSECURE=1).
+if (process.env.ZABBIX_TLS_INSECURE === '1') process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 const TICK_MS = 200;
 const FULL_EVERY = 5; // full snapshot every 5 ticks (1 s)
-const DASHBOARD_NAME = 'Planta Aceitera · Estado y CEP'; // created by tools/create-zabbix-dashboard.mjs
 const CONTROL_TOKEN = process.env.CONTROL_TOKEN || '';
 const TEMPLATES = { templateFile: path.join(ROOT, 'zabbix', 'template_planta_aceitera_sender.yaml'), iotTemplateFile: path.join(ROOT, 'zabbix', 'template_planta_aceitera_iot.yaml') };
 const PUBLIC = new Set(['index.html', 'css', 'js', 'favicon.svg']);
@@ -87,6 +90,8 @@ let lastDiscoveryAt = 0;
 let discoveryFast = true; // resend LLD every 60 s until Zabbix accepts it
 const iotLastSent = {};
 const target = () => ({ server: cfg().zabbix.server, port: cfg().zabbix.port });
+// Transport: Zabbix API (history.push, default) or Zabbix sender (trapper port).
+const send = (items) => (cfg().zabbix.transport === 'sender' ? sendValues(target(), items) : pushValues(rpc(), items));
 const stamp = () => new Date().toISOString();
 
 async function zabbixSend(reason = 'intervalo') {
@@ -94,15 +99,18 @@ async function zabbixSend(reason = 'intervalo') {
   if (!z.enabled) return;
   try {
     const now = Date.now();
+    if (z.transport !== 'sender' && zbx.provision.state !== 'ok') return;
     if (now - lastDiscoveryAt >= (discoveryFast ? 60_000 : z.lldInterval * 1000)) {
       lastDiscoveryAt = now;
       const ids = IOT_DEVICES.map((d) => d.id);
       const lld = [...sim.discoveryData().map((d) => ({ ...d, host: z.host })), ...(cfg().iot.enabled ? sim.iot.discoveryItems(ids, cfg().iot.hostPrefix) : [])];
-      const r = await sendValues(target(), lld);
+      const r = await send(lld);
       zbx.lastDiscovery = { at: stamp(), processed: r.processed, failed: r.failed, total: r.total };
       discoveryFast = r.failed > 0;
     }
-    const r = await sendValues(target(), sim.senderItems().map((d) => ({ ...d, host: z.host })));
+    // Values are only accepted once the host exists in Zabbix (API transport).
+    if (z.transport !== 'sender' && zbx.provision.state !== 'ok') return;
+    const r = await send(sim.senderItems().map((d) => ({ ...d, host: z.host })));
     zbx.sends++;
     zbx.last = { at: stamp(), reason, processed: r.processed, failed: r.failed, total: r.total, error: null };
     if (r.failed > 0) discoveryFast = true;
@@ -115,6 +123,7 @@ async function zabbixSend(reason = 'intervalo') {
 async function iotSend(force = false) {
   const z = cfg().zabbix;
   if (!z.enabled || !cfg().iot.enabled) return;
+  if (z.transport !== 'sender' && zbx.provision.state !== 'ok') return;
   const now = Date.now();
   const due = IOT_DEVICES.filter((d) => force || now - (iotLastSent[d.id] ?? 0) >= sim.iot.state[d.id].interval * 1000).map((d) => d.id);
   if (!due.length) return;
@@ -122,7 +131,7 @@ async function iotSend(force = false) {
   for (const id of due) iotLastSent[id] = now;
   if (!items.length) return;
   try {
-    const r = await sendValues(target(), items);
+    const r = await send(items);
     zbx.iot.sends++;
     zbx.iot.last = { at: stamp(), devices: new Set(items.map((i) => i.host)).size, processed: r.processed, failed: r.failed, total: r.total, error: null };
     if (r.failed > 0) discoveryFast = true;
@@ -149,6 +158,7 @@ function rpc() {
 }
 
 let provisionRetry = null;
+let provisionTries = 0;
 async function zabbixProvision() {
   clearTimeout(provisionRetry);
   const z = cfg().zabbix;
@@ -156,19 +166,29 @@ async function zabbixProvision() {
     zbx.provision = { state: 'deshabilitado', detail: 'Falta URL de API o token de Zabbix' };
     return zbx.provision;
   }
-  zbx.provision = { state: 'en curso' };
+  zbx.provision = { state: 'en curso', step: 'conectando con la API' };
   try {
     const api = rpc();
+    // Zabbix may still be starting (same deploy): wait for the API before anything else.
+    const version = await api('apiinfo.version', {}, false);
+    if (z.transport !== 'sender' && Number(version.split('.')[0]) < 7) throw new Error(`Zabbix ${version}: el envío por API (history.push) requiere Zabbix 7.0 o superior; usa ZABBIX_TRANSPORT=sender`);
+    zbx.provision.step = 'templates, host e IoT';
     const r = await provision(api, { ...cfg(), iotDevices: IOT_DEVICES.map((d) => ({ ...d, enabled: sim.iot.state[d.id].enabled })) }, TEMPLATES);
-    zbx.provision = { state: 'ok', at: stamp(), ...r };
     console.log(`Zabbix ${r.version}: templates importados, ${r.action} (hostid ${r.hostid}); IoT ${JSON.stringify(r.iot)}`);
+    zbx.provision = { state: 'en curso', step: 'reglas CEP', ...r };
     await zabbixCep();
+    zbx.provision.step = 'dashboard';
     try {
-      const [d] = await api('dashboard.get', { filter: { name: [DASHBOARD_NAME] }, output: ['dashboardid'] });
-      zbx.dashboardId = d?.dashboardid ?? null;
-    } catch {
-      zbx.dashboardId = null;
+      const d = await upsertDashboard(api, { hostName: z.host, groupName: z.hostGroup });
+      zbx.dashboardId = d.id;
+      zbx.dashboard = { state: d.action, name: d.name, id: d.id };
+      console.log(`Zabbix dashboard ${d.action}: ${d.name} (id ${d.id})`);
+    } catch (e) {
+      zbx.dashboard = { state: 'error', detail: e.message };
+      console.error('Dashboard Zabbix:', e.message);
     }
+    zbx.provision = { state: 'ok', at: stamp(), ...r, dashboard: zbx.dashboard?.state, transport: z.transport };
+    provisionTries = 0;
     lastDiscoveryAt = 0;
     discoveryFast = true;
     setTimeout(() => {
@@ -176,9 +196,11 @@ async function zabbixProvision() {
       iotSend(true);
     }, 2000);
   } catch (e) {
-    zbx.provision = { state: 'error', at: stamp(), detail: e.message };
-    console.error('Provisión Zabbix falló:', e.message, '— reintento en 60 s');
-    provisionRetry = setTimeout(zabbixProvision, 60_000);
+    // Back off: 10 s, 20 s, 40 s, then every 60 s (Zabbix may come up after the app).
+    const wait = Math.min(60_000, 10_000 * 2 ** provisionTries++);
+    zbx.provision = { state: 'error', at: stamp(), detail: e.message, step: zbx.provision.step };
+    console.error(`Provisión Zabbix falló (${zbx.provision.step ?? ''}):`, e.message, `— reintento en ${wait / 1000} s`);
+    provisionRetry = setTimeout(zabbixProvision, wait);
   }
   return zbx.provision;
 }
@@ -206,7 +228,7 @@ setInterval(async () => {
   try {
     const api = rpc();
     zbx.cep.results = await cepResults(api, [zbx.provision.hostid]);
-    if (cepTick++ % 6 === 0) zbx.cep.rules = await cepStatus(api);
+    if (cepTick++ % 6 === 0) zbx.cep.rules = await cepStatus(api, cfg().zabbix.hostGroup);
   } catch (e) {
     zbx.cep.results = { ...(zbx.cep.results || {}), error: e.message };
   }
@@ -224,7 +246,8 @@ setInterval(() => {
 async function zabbixTest() {
   const z = cfg().zabbix;
   const out = { trapper: null, api: null, token: null };
-  try {
+  if (z.transport !== 'sender') out.trapper = { ok: true, detail: 'no se usa: los valores van por la API de Zabbix (history.push)' };
+  else try {
     const t0 = Date.now();
     await new Promise((resolve, reject) => {
       const s = net.createConnection({ host: z.server, port: z.port }, () => {
@@ -508,5 +531,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 if (!CONTROL_TOKEN) console.warn('CONTROL_TOKEN no definido: el panel de configuración y las fallas quedan abiertos a cualquiera.');
-console.log(`Config: ${store.file} · Zabbix sender ${cfg().zabbix.enabled ? `→ ${cfg().zabbix.server}:${cfg().zabbix.port} host "${cfg().zabbix.host}" cada ${cfg().zabbix.sendInterval}s` : 'deshabilitado'}`);
+{
+  const z = cfg().zabbix;
+  const how = z.transport === 'sender' ? `sender → ${z.server}:${z.port}` : `API (history.push) → ${z.apiUrl}`;
+  console.log(`Config: ${store.file} · Zabbix ${z.enabled ? `${how} · host "${z.host}" cada ${z.sendInterval}s${z.apiToken ? '' : ' · FALTA ZABBIX_API_TOKEN'}` : 'deshabilitado (define ZABBIX_URL y ZABBIX_API_TOKEN)'}`);
+}
 server.listen(PORT, () => console.log(`Planta aceitera demo escuchando en http://0.0.0.0:${PORT}`));

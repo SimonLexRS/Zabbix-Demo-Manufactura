@@ -97,21 +97,30 @@ export class ConfigPanel {
   // ───────────── Zabbix ─────────────
   zabbixHtml() {
     const z = this.data.zabbix;
+    const lock = z.fromEnv ? 'disabled title="Definido por el entorno (ZABBIX_URL / ZABBIX_API_TOKEN)"' : '';
+    const sender = z.transport === 'sender';
     return `
-      <h3>Envío con Zabbix sender</h3>
+      <h3>Conexión con Zabbix</h3>
+      <p class="note">Basta con la <b>URL de Zabbix</b> y un <b>token de API</b> (usuario Super admin). Al iniciar, la app importa los templates y crea el host de planta, los hosts IoT, las reglas CEP y el dashboard. Los valores viajan por la API de Zabbix (<code>history.push</code>, Zabbix 7.0+): no hace falta abrir el puerto 10051 ni compartir red Docker.${z.fromEnv ? ' <b>Definido por el entorno</b> (<code>ZABBIX_URL</code>, <code>ZABBIX_API_TOKEN</code>).' : ''}</p>
       <button class="cfg-switch" data-act="z-enabled"><span>Enviar datos a Zabbix</span>${sw(z.enabled)}</button>
       <div class="form" id="zform">
-        <label>Servidor / proxy<input name="server" value="${esc(z.server)}" /></label>
-        <label>Puerto trapper<input name="port" type="number" min="1" max="65535" value="${z.port}" /></label>
+        <label class="wide">URL de Zabbix<input name="url" value="${esc(z.url ?? '')}" placeholder="https://zabbix.midominio.com" ${lock} /></label>
+        <label class="wide">Token de API ${z.hasToken ? `(guardado: ${esc(z.apiToken)})` : '(no configurado)'}<input name="apiToken" type="password" autocomplete="off" placeholder="${z.hasToken ? 'Dejar vacío para mantener el actual' : 'Pega el token de Zabbix'}" ${lock} /></label>
         <label>Host en Zabbix<input name="host" value="${esc(z.host)}" /></label>
         <label>Grupo de hosts<input name="hostGroup" value="${esc(z.hostGroup)}" /></label>
         <label>Intervalo de envío (s)<input name="sendInterval" type="number" min="2" max="3600" value="${z.sendInterval}" /></label>
         <label>Reenvío de LLD (s)<input name="lldInterval" type="number" min="60" max="86400" value="${z.lldInterval}" /></label>
-        <label class="wide">URL de la API<input name="apiUrl" value="${esc(z.apiUrl)}" placeholder="http://zabbix-web:8080/api_jsonrpc.php" /></label>
-        <label class="wide">URL web pública de Zabbix (link al dashboard desde la sala de monitoreo)<input name="webUrl" value="${esc(z.webUrl ?? '')}" placeholder="https://zabbix.midominio.com" /></label>
-        <label class="wide">Token de API ${z.hasToken ? `(guardado: ${esc(z.apiToken)})` : '(no configurado)'}<input name="apiToken" type="password" autocomplete="off" placeholder="${z.hasToken ? 'Dejar vacío para mantener el actual' : 'Pega el token de Zabbix'}" /></label>
-        <label class="wide">Orígenes permitidos de trapper ({$TRAPPER.ALLOWED_HOSTS})<input name="trapperAllowedHosts" value="${esc(z.trapperAllowedHosts)}" /></label>
+        <label class="wide">URL web pública (link al dashboard desde la sala de monitoreo)<input name="webUrl" value="${esc(z.webUrl ?? '')}" placeholder="igual que la URL de Zabbix" /></label>
       </div>
+      <details class="adv" ${sender ? 'open' : ''}>
+        <summary>Avanzado: transporte y Zabbix sender</summary>
+        <div class="form" id="zadv">
+          <label>Transporte<select name="transport" ${lock}><option value="api" ${sender ? '' : 'selected'}>API de Zabbix (history.push)</option><option value="sender" ${sender ? 'selected' : ''}>Zabbix sender (puerto trapper)</option></select></label>
+          <label>Servidor / proxy (sender)<input name="server" value="${esc(z.server)}" /></label>
+          <label>Puerto trapper<input name="port" type="number" min="1" max="65535" value="${z.port}" /></label>
+          <label class="wide">Orígenes permitidos de trapper ({$TRAPPER.ALLOWED_HOSTS})<input name="trapperAllowedHosts" value="${esc(z.trapperAllowedHosts)}" /></label>
+        </div>
+      </details>
       <div class="row-actions">
         <button class="primary" data-act="z-save">Guardar y aplicar</button>
         <button data-act="z-test">Probar conexión</button>
@@ -132,15 +141,23 @@ export class ConfigPanel {
     const iotTxt = iot ? (iot.error ? `error: ${iot.error}` : `${iot.devices} disp. · ${iot.processed} ok / ${iot.failed} fallidos · ${ago(iot.at)}`) : '—';
     const lld = s.lastDiscovery ? `${s.lastDiscovery.processed} ok / ${s.lastDiscovery.failed} fallidos · ${ago(s.lastDiscovery.at)}` : '—';
     const p = s.provision || {};
-    const prov = p.state === 'ok' ? `ok · Zabbix ${p.version} · ${p.action}${p.iot ? ` · IoT +${p.iot.created} / ~${p.iot.updated} / off ${p.iot.disabled}` : ''}` : `${p.state}${p.detail ? ` · ${p.detail}` : ''}`;
+    const prov = p.state === 'ok'
+      ? `ok · Zabbix ${p.version} · templates · ${p.action}${p.iot ? ` · IoT +${p.iot.created} / ~${p.iot.updated} / off ${p.iot.disabled}` : ''} · dashboard ${p.dashboard ?? '—'} · ${p.transport === 'sender' ? 'sender' : 'API'}`
+      : `${p.state}${p.step ? ` (${p.step})` : ''}${p.detail ? ` · ${p.detail}` : ''}`;
     return `<span>Planta</span><span>${esc(send)}</span><span>IoT</span><span>${esc(iotTxt)}</span><span>LLD</span><span>${esc(lld)}</span><span>Alta</span><span>${esc(prov)}</span><span>CEP Zabbix</span><span>${esc(s.cep?.state ?? '—')}${s.cep?.rules?.length ? ` · ${s.cep.rules.length} reglas` : ''}${s.cep?.detail ? ` · ${esc(s.cep.detail)}` : ''}</span>`;
   }
 
   zabbixForm() {
     const f = $('#zform', this.body);
     const v = (n) => f.querySelector(`[name="${n}"]`).value.trim();
-    const z = { server: v('server'), port: Number(v('port')), host: v('host'), hostGroup: v('hostGroup'), sendInterval: Number(v('sendInterval')), lldInterval: Number(v('lldInterval')), apiUrl: v('apiUrl'), webUrl: v('webUrl'), trapperAllowedHosts: v('trapperAllowedHosts') };
-    if (v('apiToken')) z.apiToken = v('apiToken');
+    const a = $('#zadv', this.body);
+    const va = (n) => a.querySelector(`[name="${n}"]`).value.trim();
+    const z = { host: v('host'), hostGroup: v('hostGroup'), sendInterval: Number(v('sendInterval')), lldInterval: Number(v('lldInterval')), webUrl: v('webUrl'), server: va('server'), port: Number(va('port')), trapperAllowedHosts: va('trapperAllowedHosts') };
+    if (!this.data.zabbix.fromEnv) {
+      z.url = v('url');
+      z.transport = va('transport');
+      if (v('apiToken')) z.apiToken = v('apiToken');
+    }
     return z;
   }
 

@@ -19,19 +19,29 @@ const str = (v, re, max = 200) => {
   return s.length <= max && re.test(s) ? s : undefined;
 };
 
+// ZABBIX_URL is the frontend base URL (https://zabbix.example.com or http://zabbix-web:8080);
+// the API URL and the dashboard link are derived from it.
+export const apiFromUrl = (u) => (u ? (/api_jsonrpc\.php$/.test(u) ? u : `${u.replace(/\/+$/, '')}/api_jsonrpc.php`) : '');
+export const webFromUrl = (u) => (u ? u.replace(/\/?api_jsonrpc\.php$/, '').replace(/\/+$/, '') : '');
+
 export function defaultsFromEnv(env = process.env) {
+  const url = webFromUrl(env.ZABBIX_URL || '');
   return {
     zabbix: {
-      enabled: !!env.ZABBIX_SERVER,
+      enabled: !!(url || env.ZABBIX_SERVER || env.ZABBIX_API_URL),
+      // 'api': values and LLD over the Zabbix API (history.push, Zabbix 7.0+) — only URL + token.
+      // 'sender': Zabbix sender protocol to ZABBIX_SERVER:10051 (needs the trapper port reachable).
+      transport: env.ZABBIX_TRANSPORT === 'sender' || (!url && env.ZABBIX_SERVER && !env.ZABBIX_TRANSPORT) ? 'sender' : 'api',
+      url,
       server: env.ZABBIX_SERVER || 'zabbix-server',
       port: num(env.ZABBIX_PORT, 1, 65535, 10051),
       host: env.ZABBIX_HOST || 'Planta Aceitera',
       hostGroup: env.ZABBIX_HOST_GROUP || 'Manufactura',
       sendInterval: num(env.ZABBIX_SEND_INTERVAL, 2, 3600, 10),
       lldInterval: num(env.ZABBIX_LLD_INTERVAL, 60, 86400, 600),
-      apiUrl: env.ZABBIX_API_URL || '',
+      apiUrl: url ? apiFromUrl(url) : env.ZABBIX_API_URL || '',
       apiToken: env.ZABBIX_API_TOKEN || '',
-      webUrl: env.ZABBIX_WEB_URL || '', // public Zabbix frontend (link to the dashboard)
+      webUrl: env.ZABBIX_WEB_URL || url, // public Zabbix frontend (link to the dashboard)
       trapperAllowedHosts: env.ZABBIX_TRAPPER_ALLOWED_HOSTS || '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1',
     },
     iot: { enabled: !off(env.IOT_ENABLED ?? '1'), hostPrefix: env.IOT_HOST_PREFIX || 'iot-', group: env.IOT_HOST_GROUP || 'Manufactura/IoT', randomDropouts: true, devices: {} },
@@ -62,6 +72,15 @@ export function applyPatch(cfg, patch = {}) {
   };
   const z = patch.zabbix || {};
   if (z.enabled !== undefined) c.zabbix.enabled = !!z.enabled;
+  if (z.transport !== undefined) set(c.zabbix, 'transport', ['api', 'sender'].includes(z.transport) ? z.transport : undefined, 'transporte');
+  if (z.url !== undefined) {
+    set(c.zabbix, 'url', z.url === '' ? '' : str(z.url, /^https?:\/\/[^\s]+$/, 300), 'URL de Zabbix');
+    if (c.zabbix.url) {
+      c.zabbix.url = webFromUrl(c.zabbix.url);
+      c.zabbix.apiUrl = apiFromUrl(c.zabbix.url);
+      if (z.webUrl === undefined && !c.zabbix.webUrl) c.zabbix.webUrl = c.zabbix.url;
+    }
+  }
   if (z.server !== undefined) set(c.zabbix, 'server', str(z.server, /^[A-Za-z0-9][A-Za-z0-9.-]*$/, 253), 'servidor Zabbix');
   if (z.port !== undefined) c.zabbix.port = num(z.port, 1, 65535, c.zabbix.port);
   if (z.host !== undefined) set(c.zabbix, 'host', str(z.host, /^[\w .-]+$/, 128), 'nombre de host');
@@ -132,6 +151,14 @@ export class ConfigStore {
       if (saved.sim) delete saved.sim.randomFaults;
       if (saved.realism) delete saved.realism.techsRepairManual;
     }
+    // With ZABBIX_URL the environment is the source of truth for the Zabbix connection: a new
+    // Dokploy / Zabbix only needs ZABBIX_URL + ZABBIX_API_TOKEN (whatever was saved before).
+    this.envLocked = !!env.ZABBIX_URL;
+    if (this.envLocked && saved.zabbix) {
+      for (const k of ['url', 'apiUrl', 'transport', 'enabled']) delete saved.zabbix[k];
+      if (env.ZABBIX_API_TOKEN) delete saved.zabbix.apiToken;
+      if (env.ZABBIX_WEB_URL || !saved.zabbix.webUrl) delete saved.zabbix.webUrl;
+    }
     // The env token always wins if the saved one is empty (first deploy with token in Dokploy).
     const { config } = applyPatch(this.defaults, saved);
     config.configVersion = CONFIG_VERSION;
@@ -163,6 +190,7 @@ export class ConfigStore {
   publicView() {
     const c = structuredClone(this.config);
     c.zabbix.hasToken = !!c.zabbix.apiToken;
+    c.zabbix.fromEnv = this.envLocked;
     c.zabbix.apiToken = c.zabbix.apiToken ? `••••${c.zabbix.apiToken.slice(-4)}` : '';
     return { ...c, persisted: this.persisted, persistError: this.persistError, file: this.file };
   }

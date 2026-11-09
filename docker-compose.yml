@@ -1,6 +1,11 @@
 # Planta Aceitera 3D para Dokploy (Compose).
-# Se une a la red del stack de Zabbix para enviar con Zabbix sender a zabbix-server:10051
-# y para dar de alta template/host por la API en zabbix-web:8080.
+#
+# Para cualquier Zabbix 7.0+ / 8.0 basta con dos variables en Dokploy → Environment:
+#   ZABBIX_URL=https://zabbix.midominio.com      (o http://zabbix-web:8080 si comparten red)
+#   ZABBIX_API_TOKEN=<token de un usuario Super admin>
+# Al desplegar, la app importa los templates y crea el host de planta, los hosts IoT, las reglas
+# CEP y el dashboard; los valores viajan por la API de Zabbix (history.push). No necesita el
+# puerto 10051 ni unirse a la red del stack de Zabbix.
 # El dominio se agrega en Dokploy → Domains (servicio "planta", puerto 8080).
 
 services:
@@ -9,33 +14,29 @@ services:
     restart: unless-stopped
     environment:
       PORT: 8080
-      SIM_SPEED: ${SIM_SPEED:-1}
-      RANDOM_FAULTS: ${RANDOM_FAULTS:-0}
-      TECHS_REPAIR_MANUAL: ${TECHS_REPAIR_MANUAL:-0}
-      ZABBIX_WEB_URL: ${ZABBIX_WEB_URL:-}
-      CONTROL_TOKEN: ${CONTROL_TOKEN:-}
       DATA_DIR: /app/data
-      IOT_ENABLED: ${IOT_ENABLED:-1}
-      ZABBIX_SERVER: ${ZABBIX_SERVER:-zabbix-server}
-      ZABBIX_PORT: ${ZABBIX_PORT:-10051}
+      # Zabbix (obligatorias)
+      ZABBIX_URL: ${ZABBIX_URL:-}
+      ZABBIX_API_TOKEN: ${ZABBIX_API_TOKEN:-}
+      # Clave de administrador del panel (recomendada)
+      CONTROL_TOKEN: ${CONTROL_TOKEN:-}
+      # Opcionales
+      ZABBIX_WEB_URL: ${ZABBIX_WEB_URL:-}
       ZABBIX_HOST: ${ZABBIX_HOST:-Planta Aceitera}
       ZABBIX_HOST_GROUP: ${ZABBIX_HOST_GROUP:-Manufactura}
       ZABBIX_SEND_INTERVAL: ${ZABBIX_SEND_INTERVAL:-10}
-      ZABBIX_API_URL: ${ZABBIX_API_URL:-http://zabbix-web:8080/api_jsonrpc.php}
-      ZABBIX_API_TOKEN: ${ZABBIX_API_TOKEN:-}
+      ZABBIX_TLS_INSECURE: ${ZABBIX_TLS_INSECURE:-0}
+      ZABBIX_TRANSPORT: ${ZABBIX_TRANSPORT:-api}
+      ZABBIX_SERVER: ${ZABBIX_SERVER:-}
+      ZABBIX_PORT: ${ZABBIX_PORT:-10051}
+      IOT_ENABLED: ${IOT_ENABLED:-1}
+      SIM_SPEED: ${SIM_SPEED:-1}
+      RANDOM_FAULTS: ${RANDOM_FAULTS:-0}
+      TECHS_REPAIR_MANUAL: ${TECHS_REPAIR_MANUAL:-0}
     expose:
       - "8080"
     volumes:
       - planta-data:/app/data
-    networks:
-      - default
-      - zabbix
 
 volumes:
   planta-data:
-
-networks:
-  zabbix:
-    external: true
-    # Red por defecto del compose de Zabbix en Dokploy (<appName>_default).
-    name: ${ZABBIX_NETWORK:-zabbix-testing-lab01-mybwkj_default}
