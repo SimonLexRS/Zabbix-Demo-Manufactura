@@ -378,7 +378,9 @@ export class Simulation {
   stationFree(id) {
     const s = this.stations[id];
     if (!s) return true;
-    if (this.stationDown(id)) return false;
+    // A jammed noria blocks its hopper. With a network/system outage the next truck still
+    // drives onto the station (nobody stops it) and gets stuck there, as in a real plant.
+    if (this.stationDown(id) && !this.hasFault('station_down', id)) return false;
     return s.users.size < s.cap;
   }
 
