@@ -79,6 +79,11 @@ const macros = [
   ['{$PLANTA.NODATA}', '2m', 'Tiempo sin datos antes de alertar.'],
 ];
 
+// Zabbix 8.0 ships the global macro {$TRAPPER.ALLOWED_HOSTS} = 127.0.0.1,::1, so trapper
+// items reject data sent from containers. The sender template overrides it with the
+// private ranges used by Docker networks (edit it on the host to restrict further).
+const SENDER_MACROS = [['{$TRAPPER.ALLOWED_HOSTS}', '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1', 'Orígenes permitidos para los ítems trapper (Zabbix sender). Redes privadas de Docker por defecto.']];
+
 function build(mode) {
   const sender = mode === 'sender';
   const T = sender ? 'Planta Aceitera Demo by Zabbix sender' : 'Planta Aceitera Demo by HTTP';
@@ -196,7 +201,7 @@ function build(mode) {
 
   const allMacros = [
     ...(sender
-      ? []
+      ? SENDER_MACROS
       : [
           ['{$PLANTA.URL}', 'http://planta-aceitera:8080', 'URL base del simulador (sin barra final).'],
           ['{$PLANTA.INTERVAL}', '30s', 'Intervalo de consulta del ítem maestro.'],

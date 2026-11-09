@@ -80,6 +80,8 @@ Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 
 
 **Alta automática**: con `ZABBIX_API_URL` y `ZABBIX_API_TOKEN` la app importa `zabbix/template_planta_aceitera_sender.yaml` (**Planta Aceitera Demo by Zabbix sender**), crea el grupo `Manufactura` y el host `Planta Aceitera` con el template. Reintenta cada 60 s si falla. El token se crea en Zabbix → *User settings → API tokens* (usuario con permiso para importar templates y crear hosts).
 
+**Allowed hosts de los trapper**: Zabbix 8.0 trae la macro global `{$TRAPPER.ALLOWED_HOSTS}` = `127.0.0.1,::1`, que rechaza envíos desde contenedores. El template sender la redefine con las redes privadas de Docker (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`); puedes restringirla más en las macros del host.
+
 | Variable | Default | Uso |
 |---|---|---|
 | `ZABBIX_SERVER` | — (en compose: `zabbix-server`) | Server/proxy que recibe el sender |
