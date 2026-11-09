@@ -7,16 +7,6 @@ const SEV_CLASS = ['info', 'warning', 'average', 'high', 'disaster'];
 const fmt = (v, d = 0) => (v === undefined || v === null || Number.isNaN(v) ? '—' : Number(v).toLocaleString('es-BO', { minimumFractionDigits: d, maximumFractionDigits: d }));
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
-const FAULTS = [
-  { fault: 'boiler_trip', target: 'B1', label: 'Disparo Caldera 1', hint: 'Baja presión de vapor → molienda reducida' },
-  { fault: 'boiler_trip', target: 'B2', label: 'Disparo Caldera 2', hint: 'Baja presión de vapor → molienda reducida' },
-  { fault: 'hexane_lel', label: 'Fuga de hexano (LEL)', hint: 'Desastre: interlock detiene el extractor' },
-  { fault: 'noria_jam', target: 'N1', label: 'Atasco Noria 1', hint: 'Tolva 1 fuera de servicio, cola de camiones' },
-  { fault: 'noria_jam', target: 'N2', label: 'Atasco Noria 2', hint: 'Tolva 2 fuera de servicio' },
-  { fault: 'silo_hotspot', label: 'Punto caliente en silo', hint: 'Termometría > 32 °C' },
-  { fault: 'scale_fault', label: 'Balanza de ingreso sin señal', hint: 'Se detiene la recepción' },
-];
-
 export class UI {
   constructor(handlers) {
     this.h = handlers;
@@ -57,25 +47,15 @@ export class UI {
       };
       tour.appendChild(b);
     }
-    const fl = $('#faultList');
-    for (const f of FAULTS) {
-      const b = document.createElement('button');
-      b.className = 'menu-item';
-      b.innerHTML = `<b>${esc(f.label)}</b><span>${esc(f.hint)}</span>`;
-      b.onclick = () => {
-        this.closeMenus();
-        this.h.onFault({ fault: f.fault, target: f.target });
-      };
-      fl.appendChild(b);
-    }
-    const clr = document.createElement('button');
-    clr.className = 'menu-item ok';
-    clr.innerHTML = '<b>Normalizar todo</b><span>Resuelve todas las fallas activas</span>';
-    clr.onclick = () => {
-      this.closeMenus();
-      this.h.onFault({ clearFaults: true });
-    };
-    fl.appendChild(clr);
+    // Problem panel: rendered from the live catalog in each snapshot.
+    const pl = $('#faultList');
+    pl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const row = e.target.closest('[data-problem]');
+      if (row) this.h.onProblem(row.dataset.problem, row.dataset.state === '0');
+      if (e.target.closest('#randomToggle')) this.h.onRandomFaults(!this.last?.randomFaults);
+      if (e.target.closest('#clearProblems')) this.h.onClearProblems();
+    });
 
     for (const btn of document.querySelectorAll('[data-menu]')) {
       btn.onclick = (e) => {
@@ -132,7 +112,61 @@ export class UI {
     document.querySelectorAll('#speeds button').forEach((b) => b.classList.toggle('active', Number(b.dataset.speed) === s.speed));
     this.renderKpis(s);
     this.renderFeed(s);
+    this.renderProblems(s);
+    this.renderZabbix(s);
     if (this.selected) this.renderDetails(this.selected, s);
+  }
+
+  // Problem points: switch per problem (manual = stays until switched off).
+  renderProblems(s) {
+    const cat = s.problemCatalog || [];
+    const active = cat.filter((p) => p.state > 0).length;
+    const btn = $('#btnProblems');
+    btn.innerHTML = `Problemas${active ? ` <span class="count on">${active}</span>` : ''}`;
+    const sig = `${s.randomFaults}|${cat.map((p) => `${p.state}:${p.leftMin ?? ''}`).join(',')}`;
+    if (sig === this.probSig) return;
+    this.probSig = sig;
+    const ORIGIN = ['', 'Manual · hasta desactivarla', 'Aleatoria'];
+    $('#faultList').innerHTML = `
+      <div class="pp-head">
+        <b>Puntos problemáticos</b>
+        <button id="randomToggle" class="switch-row" type="button" aria-pressed="${!!s.randomFaults}">
+          <span>Fallas aleatorias</span><i class="switch ${s.randomFaults ? 'on' : ''}"></i>
+        </button>
+      </div>
+      ${cat
+        .map((p) => {
+          const meta = p.state === 2 ? `Aleatoria · se resuelve en ${p.leftMin} min` : p.state === 1 ? `${ORIGIN[1]} · ${p.sinceMin} min` : esc(p.desc);
+          return `<button type="button" class="pp sev-${SEV_CLASS[p.sev]} ${p.state ? 'on' : ''}" data-problem="${p.id}" data-state="${p.state}" title="${esc(p.desc)}">
+            <i class="dot"></i><span class="pp-txt"><b>${esc(p.name)}</b><small>${meta}</small></span><i class="switch ${p.state ? 'on' : ''}"></i></button>`;
+        })
+        .join('')}
+      <button id="clearProblems" type="button" class="menu-item ok"${active ? '' : ' disabled'}><b>Desactivar todos</b><span>Normaliza manuales y aleatorias</span></button>`;
+  }
+
+  renderZabbix(s) {
+    const z = s.zabbix;
+    const el = $('#zbx');
+    if (!z || !z.enabled) {
+      el.className = 'zbx off';
+      el.textContent = s.zabbix ? 'Zabbix sender: deshabilitado' : '';
+      return;
+    }
+    const l = z.last;
+    let cls = 'zbx';
+    let txt = `Zabbix sender → ${z.server} · esperando primer envío`;
+    if (l?.error) {
+      cls += ' bad';
+      txt = `Zabbix sender: ${l.error}`;
+    } else if (l) {
+      const ago = Math.max(0, Math.round((Date.now() - Date.parse(l.at)) / 1000));
+      cls += l.failed > 0 ? ' warn' : ' ok';
+      txt = `Zabbix sender · ${l.processed} procesados · ${l.failed} fallidos · hace ${ago} s`;
+    }
+    if (z.provision === 'error') txt += ' · alta en Zabbix con error';
+    el.className = cls;
+    el.textContent = txt;
+    el.title = `Host "${z.host}" en ${z.server}. Alta automática: ${z.provision}`;
   }
 
   recordHistory(s) {
@@ -292,6 +326,16 @@ function sparkline(canvas, data, { min, max, unit = '' }) {
   g.fillText(`${fmt(last, 1)}${unit}`, w - 4, 12);
 }
 
+// Problem point linked to an asset (detail panel shows a toggle for it).
+const ASSET_PROBLEM = { BAL_IN: 'bal_in_net', BAL_OUT: 'bal_out_net', GATE: 'gate_net', SAMP: 'samp_fault', OL: 'ol_arm', H1: 'noria_N1', H2: 'noria_N2', N1: 'noria_N1', N2: 'noria_N2', B1: 'boiler_B1', B2: 'boiler_B2', EXT: 'hexane_leak', PREP: 'prep_power', S2: 'silo_hot_S2' };
+
+function problemActions(s, ...ids) {
+  return ids
+    .map((id) => (s.problemCatalog || []).find((p) => p.id === id))
+    .filter(Boolean)
+    .map((p) => ({ label: p.state ? `Desactivar: ${p.name}` : `Activar: ${p.name}`, problem: p.id, active: !p.state }));
+}
+
 // Builds the details model for any selectable thing.
 export function describe(pick, s) {
   const { kind, id } = pick;
@@ -317,6 +361,7 @@ export function describe(pick, s) {
         ['Extracción a preparación', `${fmt(st.outflow * 60, 1)} t/h`, ''],
       ],
       chart: { key: `st.${id}.pct`, label: 'Nivel (%) — últimos minutos', min: 0, max: 100, unit: '%' },
+      actions: problemActions(s, ASSET_PROBLEM[id]),
     };
   }
   if (kind === 'tank') {
@@ -358,7 +403,7 @@ export function describe(pick, s) {
         ['Demanda de vapor', `${fmt(p.steamDemand, 1)} t/h`, 'planta.steam_demand_tph'],
       ],
       chart: { key: `b.${id}.load`, label: 'Carga (%)', min: 0, max: 100, unit: '%' },
-      actions: [{ label: b.on ? 'Simular disparo' : 'Normalizar', cmd: b.on ? { fault: 'boiler_trip', target: id } : { clearFaults: true } }],
+      actions: problemActions(s, ASSET_PROBLEM[id]),
     };
   }
   if (kind === 'station') {
@@ -374,14 +419,17 @@ export function describe(pick, s) {
       kind: 'Punto de operación',
       title: def.name,
       sub: id.startsWith('BAL') ? 'Balanza para camiones, 80 t' : id.startsWith('H') ? 'Volcadora hidráulica + tolva + noria' : '',
-      status: down ? 'Fuera de servicio' : st?.busy ? 'Ocupada' : 'Libre',
+      status: down ? (st?.stopped ? `Fuera de servicio · ${st.stopped} camión detenido` : 'Fuera de servicio') : st?.busy ? 'Ocupada' : 'Libre',
       statusClass: down ? 'bad' : st?.busy ? 'warn' : 'ok',
       rows: [
         ['Disponible', down ? '0' : '1', `planta.station.available[${id}]`],
+        ['Red / comunicación', down && !['H1', 'H2'].includes(id) ? '0 (sin red)' : '1 (en línea)', `planta.station.network[${id}]`],
         ['Camiones en uso', `${st?.busy ?? 0} / ${st?.cap ?? 1}`, `planta.station.busy[${id}]`],
+        ['Camiones detenidos', fmt(st?.stopped ?? 0), `planta.station.trucks_stopped[${id}]`],
         ['Operaciones hoy', fmt(st?.ops), `planta.station.operations_today[${id}]`],
         ...extra,
       ],
+      actions: problemActions(s, ASSET_PROBLEM[id]),
     };
   }
   if (kind === 'truck') {
@@ -419,7 +467,8 @@ export function describe(pick, s) {
             ['Temp. acondicionador', `${fmt(p.prepTemp, 1)} °C`, 'planta.prep_conditioner_temp_c'],
             ['Silo pulmón', `${fmt(s.buffer.stock)} t`, 'planta.buffer_silo_t'],
             ['Potencia eléctrica', `${fmt(p.power, 2)} MW`, 'planta.power_mw'],
-          ], chart: { key: 'kpi.crushPct', label: 'Capacidad utilizada (%)', min: 0, max: 110, unit: '%' } };
+          ], chart: { key: 'kpi.crushPct', label: 'Capacidad utilizada (%)', min: 0, max: 110, unit: '%' },
+          actions: problemActions(s, 'prep_power') };
       case 'EXT':
         return { ...base, kind: 'Proceso · zona clasificada', sub: 'Extractor, desolventizador-tostador (DT) y destilación de miscela', status: p.extractorRun ? (crushing ? 'Extrayendo' : 'En espera') : 'Interlock: extractor detenido', statusClass: p.extractorRun ? (p.lel > 12 ? 'warn' : 'ok') : 'bad',
           rows: [
@@ -432,7 +481,7 @@ export function describe(pick, s) {
             ['Hexano residual en harina', `${fmt(p.residualHexane)} ppm`, 'planta.meal_residual_hexane_ppm'],
             ['Producción de aceite', `${fmt(p.oilRate, 1)} t/h`, 'planta.oil_produced_today_t'],
           ], chart: { key: 'proc.lel', label: 'LEL hexano (%)', min: 0, max: 40, unit: '%' },
-          actions: [{ label: 'Simular fuga de hexano', cmd: { fault: 'hexane_lel' } }] };
+          actions: problemActions(s, 'hexane_leak', 'plc_ext_comm') };
       case 'HEX':
         return { ...base, kind: 'Almacenamiento de solvente', sub: 'n-Hexano · dique de contención', status: k.hexanePct < 25 ? 'Stock bajo' : 'Normal', statusClass: k.hexanePct < 25 ? 'warn' : 'ok',
           rows: [
@@ -451,7 +500,8 @@ export function describe(pick, s) {
             ['Calderas en servicio', `${on} / 2`, 'planta.boiler.status[B*]'],
             ['Potencia eléctrica', `${fmt(p.power, 2)} MW`, 'planta.power_mw'],
             ['Cascarilla (combustible)', `${fmt(s.hulls.stock)} t`, 'planta.hulls_stock_t'],
-          ], chart: { key: 'proc.steam', label: 'Presión de vapor (bar)', min: 0, max: 12, unit: ' bar' } };
+          ], chart: { key: 'proc.steam', label: 'Presión de vapor (bar)', min: 0, max: 12, unit: ' bar' },
+          actions: problemActions(s, 'boiler_B1', 'boiler_B2') };
       }
       case 'GH':
         return { ...base, kind: 'Almacén de producto', sub: 'Harina de soya 46–48 % proteína', status: k.mealPct > 90 ? 'Casi lleno' : 'Normal', statusClass: k.mealPct > 90 ? 'warn' : 'ok',
@@ -469,10 +519,10 @@ export function describe(pick, s) {
         return { ...base, kind: 'Silo pulmón', sub: 'Regula la alimentación a preparación', rows: [['Stock', `${fmt(s.buffer.stock)} t`, 'planta.buffer_silo_t'], ['Capacidad', `${fmt(s.buffer.cap)} t`, '']] };
       case 'N1':
       case 'N2': {
-        const jam = s.faults.some((f) => f.type === 'noria_jam' && f.target === id);
+        const jam = (s.problemCatalog || []).some((p) => p.id === ASSET_PROBLEM[id] && p.state > 0);
         return { ...base, kind: 'Transporte de granos', sub: id === 'N1' ? 'Tolva 1 → galería → Silos 1–4' : 'Tolva 2 → Silos 5–7 y galpones', status: jam ? 'Atascada' : s.flows[id === 'N1' ? 'H1' : 'H2'] ? 'Transportando' : 'En vacío', statusClass: jam ? 'bad' : 'ok',
           rows: [['Capacidad', '250 t/h', ''], ['Disponible', jam ? '0' : '1', `planta.station.available[${id === 'N1' ? 'H1' : 'H2'}]`]],
-          actions: [{ label: jam ? 'Liberar (normalizar)' : 'Simular atasco', cmd: jam ? { clearFaults: true } : { fault: 'noria_jam', target: id } }] };
+          actions: problemActions(s, ASSET_PROBLEM[id]) };
       }
       case 'LAB':
         return { ...base, kind: 'Calidad', sub: 'Humedad, impurezas, granos dañados, proteína y aceite residual', rows: [['Camiones analizados hoy', fmt(s.stations.SAMP?.ops), ''], ['Rechazados hoy', fmt(k.rejected), 'planta.trucks_rejected_today'], ['Proteína harina', `${fmt(p.mealProtein, 1)} %`, 'planta.meal_protein_pct']] };

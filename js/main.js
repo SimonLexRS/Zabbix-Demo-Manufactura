@@ -51,10 +51,14 @@ const ui = new UI({
     follow = null;
     flyTo(new THREE.Vector3(...t.target), t.dist);
   },
-  onFault: async (cmd) => {
-    const r = await source?.control(cmd);
-    if (cmd.clearFaults) ui.toast('Fallas normalizadas');
-    else ui.toast(r?.ok ? 'Falla inyectada — mira los problemas y Zabbix' : 'Esa falla ya está activa');
+  onProblem: (id, active) => setProblem(id, active),
+  onRandomFaults: async (on) => {
+    await source?.problems({ randomFaults: on });
+    ui.toast(on ? 'Fallas aleatorias activadas' : 'Fallas aleatorias desactivadas (solo manuales)');
+  },
+  onClearProblems: async () => {
+    await source?.problems({ clearAll: true });
+    ui.toast('Todos los problemas normalizados');
   },
   onLabels: (on) => plant.setLabelsVisible(on),
   onHome: () => {
@@ -74,12 +78,15 @@ const ui = new UI({
       follow = { kind: a.person ? 'person' : 'truck', id: a.follow };
       ui.toast('Siguiendo — arrastra para salir del seguimiento');
     }
-    if (a.cmd) {
-      await source?.control(a.cmd);
-      ui.toast(a.cmd.clearFaults ? 'Fallas normalizadas' : 'Falla inyectada');
-    }
+    if (a.problem) await setProblem(a.problem, a.active);
   },
 });
+
+async function setProblem(id, active) {
+  const r = await source?.problems({ id, active });
+  const p = r?.problems?.find((x) => x.id === id);
+  if (p) ui.toast(active ? `Activado (manual): ${p.name} — se envía a Zabbix` : `Normalizado: ${p.name}`);
+}
 
 let source = null;
 connect({

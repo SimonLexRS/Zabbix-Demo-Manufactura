@@ -38,15 +38,24 @@ export class SnapshotBuffer {
 
 export async function connect({ onSnapshot, onMode }) {
   let control = async () => ({ ok: false });
+  let problems = async () => ({ ok: false });
 
   const startLocal = async (reason) => {
     const { Simulation } = await import('./sim/simulation.js');
-    const sim = new Simulation();
+    const sim = new Simulation({ randomFaults: true });
     setInterval(() => {
       sim.advance((TICK_MS / 1000) * sim.speed);
       onSnapshot(sim.snapshot());
     }, TICK_MS);
     control = async (cmd) => ({ ok: sim.control(cmd), speed: sim.speed });
+    problems = async (cmd) => {
+      let ok = true;
+      if (cmd.clearAll) sim.clearFaults();
+      else if (cmd.randomFaults !== undefined) sim.setRandomFaults(cmd.randomFaults);
+      else ok = sim.setProblem(cmd.id, cmd.active !== false);
+      onSnapshot(sim.snapshot());
+      return { ok, randomFaults: sim.randomFaults, problems: sim.problemStates() };
+    };
     onMode({ mode: 'local', reason });
   };
 
@@ -84,14 +93,15 @@ export async function connect({ onSnapshot, onMode }) {
 
   const live = await tryServer();
   if (live) {
-    control = async (cmd) => {
+    // POST with the optional CONTROL_TOKEN (asked once and remembered).
+    const post = async (url, cmd) => {
       const headers = { 'Content-Type': 'application/json' };
       let token = null;
       try {
         token = localStorage.getItem('controlToken');
       } catch {}
       if (token) headers['x-control-token'] = token;
-      let r = await fetch('api/control', { method: 'POST', headers, body: JSON.stringify(cmd) });
+      let r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(cmd) });
       if (r.status === 401) {
         const t = window.prompt('Token de control del servidor (CONTROL_TOKEN):');
         if (!t) return { ok: false };
@@ -99,12 +109,14 @@ export async function connect({ onSnapshot, onMode }) {
           localStorage.setItem('controlToken', t);
         } catch {}
         headers['x-control-token'] = t;
-        r = await fetch('api/control', { method: 'POST', headers, body: JSON.stringify(cmd) });
+        r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(cmd) });
       }
       return r.json();
     };
+    control = (cmd) => post('api/control', cmd);
+    problems = (cmd) => post('api/problems', cmd);
   } else {
     await startLocal('sin servidor');
   }
-  return { control: (cmd) => control(cmd) };
+  return { control: (cmd) => control(cmd), problems: (cmd) => problems(cmd) };
 }

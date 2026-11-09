@@ -9,6 +9,7 @@
 
 import { GRID_BOUNDS, ROADS, SITE, STATIONS, SPAWN, YARD_SLOTS, STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS } from './layout.js';
 import { Grid, offsetRight } from './grid.js';
+import { PROBLEMS, PROBLEM_BY_ID, PLC_EXT_FIELDS } from './problems.js';
 
 export const SEVERITY = ['Información', 'Advertencia', 'Promedio', 'Alta', 'Desastre'];
 export const NOMINAL_CRUSH = 1.05; // t/min ≈ 1500 t/day
@@ -55,7 +56,7 @@ const ROUTINES = [
 ];
 
 export class Simulation {
-  constructor() {
+  constructor({ randomFaults = true } = {}) {
     this.t = 6 * 60; // minutes since day 1 00:00
     this.speed = 1;
     this.tick = 0;
@@ -77,7 +78,8 @@ export class Simulation {
       miscella: 24, lel: 4, hexLoss: 1.0, residualOil: 0.8, residualHexane: 180, mealProtein: 46.6,
       mealHumidity: 12.1, oilRate: 0, mealRate: 0, power: 2.4, extractorRun: true,
     };
-    this.faults = [];
+    this.active = new Map();
+    this.randomFaults = !!randomFaults;
     this.counters = this.freshCounters();
     this.roadQueue = 0;
     this.vehicles = [];
@@ -119,7 +121,7 @@ export class Simulation {
     }
     this.flows = { H1: false, H2: false, OL: false, ML: false };
     this.updateSpawns();
-    this.updateFaults(dt);
+    this.updateFaults();
     this.updateProcess(dt);
     for (const v of this.vehicles) this.updateTruck(v, dt);
     this.vehicles = this.vehicles.filter((v) => !v.gone);
@@ -139,59 +141,62 @@ export class Simulation {
     return { day, hh: Math.floor(m / 60), mm: m % 60, label: `Día ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}` };
   }
 
-  // ───────────────────────────── faults ─────────────────────────────
+  // ───────────────────────────── problems (manual + random) ─────────────────────────────
+  // this.active: id → { origin: 'manual' | 'random', since, until }
   hasFault(type, target) {
-    return this.faults.some((f) => f.type === type && (target === undefined || f.target === target));
+    for (const id of this.active.keys()) {
+      const e = PROBLEM_BY_ID[id].effect;
+      if (e.type === type && (target === undefined || e.target === target)) return true;
+    }
+    return false;
   }
 
-  injectFault(type, target) {
-    const dur = { boiler_trip: rand(50, 120), hexane_lel: rand(20, 40), noria_jam: rand(30, 70), silo_hotspot: rand(120, 200), scale_fault: rand(20, 45) }[type];
-    if (!dur) return false;
-    if (!target) {
-      target = {
-        boiler_trip: pick(['B1', 'B2']),
-        hexane_lel: 'EXT',
-        noria_jam: pick(['N1', 'N2']),
-        silo_hotspot: pick(this.storages.filter((s) => s.kind === 'silo')).id,
-        scale_fault: 'BAL_IN',
-      }[type];
+  // Station physically stopped (frozen truck, nobody enters).
+  stationDown(id) {
+    return this.hasFault('station_down', id) || (id === 'H1' && this.hasFault('noria_jam', 'N1')) || (id === 'H2' && this.hasFault('noria_jam', 'N2'));
+  }
+
+  // on=true activates (manual, no expiry); on=false deactivates. Returns true if state changed.
+  setProblem(id, on, origin = 'manual') {
+    const p = PROBLEM_BY_ID[id];
+    if (!p) return false;
+    const cur = this.active.get(id);
+    if (on) {
+      if (cur && cur.origin === origin) return false;
+      if (cur && origin === 'manual') {
+        // A random fault taken over by hand stays until switched off.
+        this.active.set(id, { origin: 'manual', since: cur.since, until: null });
+        this.log(p.sev, `Falla tomada como manual: ${p.name}`, p.src, 'falla');
+        return true;
+      }
+      if (cur) return false;
+      const until = origin === 'random' ? this.t + rand(20, 120) : null;
+      this.active.set(id, { origin, since: this.t, until });
+      this.log(p.sev, `${origin === 'manual' ? 'Falla activada manualmente' : 'Falla aleatoria'}: ${p.name}`, p.src, 'falla');
+      return true;
     }
-    if (this.hasFault(type, target)) return false;
-    this.faults.push({ id: this.nextId++, type, target, since: this.t, until: this.t + dur });
-    const msg = {
-      boiler_trip: `Disparo de ${target === 'B1' ? 'Caldera 1' : 'Caldera 2'} (llama apagada)`,
-      hexane_lel: 'Detector de gases: concentración de hexano en aumento en extracción',
-      noria_jam: `Atascamiento en ${target === 'N1' ? 'Noria 1' : 'Noria 2'} — volcadora detenida`,
-      silo_hotspot: `Termometría: aumento de temperatura en ${this.storages.find((s) => s.id === target)?.name}`,
-      scale_fault: 'Balanza de ingreso sin comunicación con el indicador',
-    }[type];
-    this.log(type === 'hexane_lel' ? 4 : 3, msg, target, 'falla');
+    if (!cur) return false;
+    this.active.delete(id);
+    this.log(0, `Normalizado: ${p.name} (${Math.round(this.t - cur.since)} min, ${cur.origin === 'manual' ? 'manual' : 'aleatoria'})`, p.src, 'mantenimiento');
     return true;
   }
 
   clearFaults() {
-    for (const f of this.faults) f.until = this.t;
+    for (const id of [...this.active.keys()]) this.setProblem(id, false);
   }
 
-  updateFaults(dt) {
-    for (const f of this.faults) {
-      if (this.t >= f.until && !f.done) {
-        f.done = true;
-        const msg = {
-          boiler_trip: `${f.target === 'B1' ? 'Caldera 1' : 'Caldera 2'} reencendida y en línea`,
-          hexane_lel: 'Ventilación forzada: LEL normalizado, extractor rearmado',
-          noria_jam: `${f.target === 'N1' ? 'Noria 1' : 'Noria 2'} liberada por mantenimiento`,
-          silo_hotspot: `Aireación aplicada en ${this.storages.find((s) => s.id === f.target)?.name}`,
-          scale_fault: 'Balanza de ingreso en línea',
-        }[f.type];
-        this.log(0, msg, f.target, 'mantenimiento');
-      }
-    }
-    this.faults = this.faults.filter((f) => !f.done);
-    if (this.t >= this.nextRandomFault) {
-      const type = pick(['boiler_trip', 'boiler_trip', 'noria_jam', 'silo_hotspot', 'scale_fault', 'hexane_lel']);
-      this.injectFault(type);
-      this.nextRandomFault = this.t + rand(150, 420);
+  setRandomFaults(on) {
+    this.randomFaults = !!on;
+    this.nextRandomFault = this.t + rand(120, 360);
+    this.log(0, `Fallas aleatorias ${this.randomFaults ? 'activadas' : 'desactivadas'}`, 'sistema');
+  }
+
+  updateFaults() {
+    for (const [id, a] of [...this.active]) if (a.origin === 'random' && this.t >= a.until) this.setProblem(id, false);
+    if (this.randomFaults && this.t >= this.nextRandomFault) {
+      const free = PROBLEMS.filter((p) => !this.active.has(p.id));
+      if (free.length) this.setProblem(pick(free).id, true, 'random');
+      this.nextRandomFault = this.t + rand(120, 360);
     }
     for (const b of this.boilers) b.on = !this.hasFault('boiler_trip', b.id);
   }
@@ -221,9 +226,10 @@ export class Simulation {
     const oilSpace = this.tanks.some((t) => t.stock < t.cap * 0.995);
     const mealSpace = this.meal.stock < this.meal.cap;
     const steamFactor = clamp((p.steam - 5) / 4, 0.2, 1);
-    const avail = this.buffer.stock > 3 && oilSpace && mealSpace && this.hexane.stock > 8 && p.extractorRun ? 1 : 0;
+    const avail = this.buffer.stock > 3 && oilSpace && mealSpace && this.hexane.stock > 8 && p.extractorRun && !this.hasFault('prep_power') ? 1 : 0;
     const target = NOMINAL_CRUSH * steamFactor * avail;
     p.feed += (target - p.feed) * Math.min(1, dt * 0.08);
+    if (this.hasFault('prep_power')) p.feed = 0; // MCC tripped: motors stop at once
     if (p.feed < 0.005) p.feed = 0;
 
     // Feed buffer silo from storage (fullest storage first).
@@ -301,7 +307,7 @@ export class Simulation {
     if (this.t >= this.nextSpawn.soy) {
       this.nextSpawn.soy = this.t + expo(day ? 24 : 48);
       const freeSlot = this.yard.find((s) => !s.truck);
-      const gateBusy = this.stations.GATE.users.size >= 3;
+      const gateBusy = this.stations.GATE.users.size >= 3 || this.stationDown('GATE');
       if (freeSlot && !gateBusy && this.vehicles.length < 18) {
         this.spawnTruck('soy');
         this.roadQueue = Math.max(0, this.roadQueue - 1);
@@ -311,7 +317,7 @@ export class Simulation {
       }
     }
     // Trucks waiting on the highway enter as soon as there is room.
-    if (this.roadQueue > 0 && this.yard.some((s) => !s.truck) && this.stations.GATE.users.size < 2 && this.vehicles.length < 18) {
+    if (this.roadQueue > 0 && this.yard.some((s) => !s.truck) && this.stations.GATE.users.size < 2 && !this.stationDown('GATE') && this.vehicles.length < 18) {
       this.spawnTruck('soy');
       this.roadQueue--;
     }
@@ -366,9 +372,7 @@ export class Simulation {
   stationFree(id) {
     const s = this.stations[id];
     if (!s) return true;
-    if (id === 'BAL_IN' && this.hasFault('scale_fault')) return false;
-    if (id === 'H1' && this.hasFault('noria_jam', 'N1')) return false;
-    if (id === 'H2' && this.hasFault('noria_jam', 'N2')) return false;
+    if (this.stationDown(id)) return false;
     return s.users.size < s.cap;
   }
 
@@ -489,6 +493,14 @@ export class Simulation {
         }
       }
     } else if (v.phase === 'dwell') {
+      if (v.station && this.stationDown(v.station)) {
+        // Station stopped (network down, jam, blocked arm): the truck stays frozen on it.
+        v.frozen = true;
+        const name = this.stations[v.station].name;
+        v.label = v.station.startsWith('BAL') ? `Detenido sobre la balanza: sin red (${name})` : `Detenido: ${name} fuera de servicio`;
+        return;
+      }
+      v.frozen = false;
       v.wait -= dt;
       if (step === 'HOPPER') {
         const tgt = this.storages.find((s) => s.id === v.target);
@@ -627,9 +639,12 @@ export class Simulation {
     if (oilPct > 0.9) add('oil_full', 1, `Tanques de aceite al ${(oilPct * 100).toFixed(0)}%`, 'TA');
     if (this.hexane.stock / this.hexane.cap < 0.25) add('hex_low', 1, `Stock de hexano bajo (${this.hexane.stock.toFixed(0)} m³)`, 'HEX');
     if (this.roadQueue > 4) add('road_queue', 1, `${this.roadQueue} camiones esperando sobre RN4`, 'PLAYA');
-    if (this.hasFault('noria_jam', 'N1')) add('noria_N1', 3, 'Noria 1 atascada — Tolva 1 fuera de servicio', 'N1');
-    if (this.hasFault('noria_jam', 'N2')) add('noria_N2', 3, 'Noria 2 atascada — Tolva 2 fuera de servicio', 'N2');
-    if (this.hasFault('scale_fault')) add('scale', 2, 'Balanza de ingreso fuera de línea', 'BAL_IN');
+    for (const [id, a] of this.active) {
+      const pr = PROBLEM_BY_ID[id];
+      add(`p_${id}`, pr.sev, `${pr.name} (${a.origin === 'random' ? 'aleatoria' : 'manual'})`, pr.src);
+    }
+    const frozen = this.vehicles.filter((v) => v.frozen).length;
+    if (frozen) add('trucks_frozen', 2, `${frozen} camión(es) detenido(s) por equipo fuera de servicio`, 'PLAYA');
 
     for (const [k, pr] of active) {
       if (!this.problems.has(k)) {
@@ -693,8 +708,10 @@ export class Simulation {
       hexane: { stock: r1(this.hexane.stock), cap: this.hexane.cap },
       proc: Object.fromEntries(Object.entries(this.proc).map(([k, v]) => [k, typeof v === 'number' ? r2(v) : v])),
       flows: this.flows,
-      stations: Object.fromEntries(Object.values(this.stations).map((s) => [s.id, { busy: s.users.size, cap: s.cap, ops: s.opsToday, down: !this.stationFree(s.id) && s.users.size < s.cap }])),
-      faults: this.faults.map((f) => ({ type: f.type, target: f.target, left: Math.round(f.until - this.t) })),
+      stations: Object.fromEntries(Object.values(this.stations).map((s) => [s.id, { busy: s.users.size, cap: s.cap, ops: s.opsToday, down: this.stationDown(s.id), stopped: this.vehicles.filter((v) => v.frozen && v.station === s.id).length }])),
+      faults: [...this.active.keys()].map((id) => ({ type: PROBLEM_BY_ID[id].effect.type, target: PROBLEM_BY_ID[id].effect.target })),
+      problemCatalog: this.problemStates(),
+      randomFaults: this.randomFaults,
       kpi: Object.fromEntries(Object.entries(this.kpis()).map(([k, v]) => [k, r1(v)])),
       problems: [...this.problems.values()].map((p) => ({ ...p, since: this.clock(p.since).label, durMin: Math.round(this.t - p.since) })),
       events: this.events.slice(0, 40).map((e) => ({ ...e, time: this.clock(e.t).label })),
@@ -730,7 +747,12 @@ export class Simulation {
       silos: obj(this.storages, (s) => ({ name: s.name, type: s.kind, level_pct: r((s.stock / s.cap) * 100), stock_t: r(s.stock, 1), capacity_t: s.cap, temp_c: r(s.temp, 1), humidity_pct: r(s.hum) })),
       tanks: obj(this.tanks, (t) => ({ name: t.name, level_pct: r((t.stock / t.cap) * 100), stock_t: r(t.stock, 1), capacity_t: t.cap, temp_c: r(t.temp, 1) })),
       boilers: obj(this.boilers, (b) => ({ name: b.name, status: b.on ? 1 : 0, load_pct: r(b.load, 1), flue_temp_c: r(b.flue, 0) })),
-      stations: obj(Object.values(this.stations), (s) => ({ name: s.name, available: this.stationFree(s.id) || s.users.size >= s.cap ? 1 : 0, busy: s.users.size, operations_today: s.opsToday })),
+      stations: obj(Object.values(this.stations), (s) => ({
+        name: s.name, available: this.stationDown(s.id) ? 0 : 1, network: this.hasFault('station_down', s.id) ? 0 : 1,
+        busy: s.users.size, operations_today: s.opsToday, trucks_stopped: this.vehicles.filter((v) => v.frozen && v.station === s.id).length,
+      })),
+      random_faults: this.randomFaults ? 1 : 0,
+      problem_states: Object.fromEntries(this.problemStates().map((p) => [p.id, p.state])),
       discovery: {
         silos: this.storages.map((s) => ({ '{#ID}': s.id, '{#NAME}': s.name, '{#TYPE}': s.kind })),
         tanks: this.tanks.map((t) => ({ '{#ID}': t.id, '{#NAME}': t.name })),
@@ -741,12 +763,57 @@ export class Simulation {
     };
   }
 
+  // 0 = normal, 1 = manual, 2 = random
+  problemStates() {
+    return PROBLEMS.map((p) => {
+      const a = this.active.get(p.id);
+      return {
+        id: p.id, name: p.name, desc: p.desc, sev: p.sev, src: p.src,
+        state: !a ? 0 : a.origin === 'manual' ? 1 : 2,
+        sinceMin: a ? Math.round(this.t - a.since) : null,
+        leftMin: a && a.until ? Math.max(0, Math.round(a.until - this.t)) : null,
+      };
+    });
+  }
+
+  // Flat list of {key, value} for Zabbix sender (trapper items).
+  senderItems() {
+    const m = this.metrics();
+    const plcDown = this.hasFault('plc_comm', 'EXT');
+    const out = [
+      { key: 'planta.sim_minutes', value: m.sim_minutes },
+      { key: 'planta.speed', value: m.speed },
+      { key: 'planta.random_faults', value: m.random_faults },
+    ];
+    for (const [f, v] of Object.entries(m.plant)) {
+      if (plcDown && PLC_EXT_FIELDS.includes(f)) continue;
+      out.push({ key: `planta.${f}`, value: v });
+    }
+    const group = (prefix, objs, skip = []) => {
+      for (const [id, fields] of Object.entries(objs))
+        for (const [f, v] of Object.entries(fields)) if (typeof v === 'number' && !skip.includes(f)) out.push({ key: `planta.${prefix}.${f}[${id}]`, value: v });
+    };
+    group('silo', m.silos);
+    group('tank', m.tanks);
+    group('boiler', m.boilers);
+    group('station', m.stations);
+    for (const [id, st] of Object.entries(m.problem_states)) out.push({ key: `planta.problem[${id}]`, value: st });
+    return out;
+  }
+
+  // LLD payloads: key → JSON array.
+  discoveryData() {
+    const d = this.metrics().discovery;
+    return Object.entries(d).map(([k, v]) => ({ key: `planta.${k}.discovery`, value: JSON.stringify(v) }));
+  }
+
   control(cmd = {}) {
     if (cmd.speed !== undefined) {
       const s = Number(cmd.speed);
       if ([0, 1, 5, 15, 30].includes(s)) this.speed = s;
     }
-    if (cmd.fault) return this.injectFault(cmd.fault, cmd.target);
+    if (cmd.problem) return this.setProblem(cmd.problem, cmd.active !== false);
+    if (cmd.randomFaults !== undefined) this.setRandomFaults(cmd.randomFaults);
     if (cmd.clearFaults) this.clearFaults();
     return true;
   }

@@ -28,6 +28,7 @@
         <div>
           <h1>Planta Aceitera · Acopio y Molienda</h1>
           <p><span id="clock">—</span> · <span id="mode" class="mode">Conectando…</span></p>
+          <p id="zbx" class="zbx off"></p>
         </div>
       </div>
     </header>
@@ -73,8 +74,8 @@
         <div id="tourList" class="menu-pop"></div>
       </div>
       <div class="menu">
-        <button data-menu="faultList" class="danger">Simular falla</button>
-        <div id="faultList" class="menu-pop"></div>
+        <button id="btnProblems" data-menu="faultList" class="danger">Problemas</button>
+        <div id="faultList" class="menu-pop problems-pop"></div>
       </div>
       <button id="btnLabels" class="active" title="Etiquetas">Etiquetas</button>
       <button id="btnHome" title="Vista general">Vista general</button>

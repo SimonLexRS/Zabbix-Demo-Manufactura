@@ -1,0 +1,32 @@
+# Planta Aceitera 3D para Dokploy (Compose).
+# Se une a la red del stack de Zabbix para enviar con Zabbix sender a zabbix-server:10051
+# y para dar de alta template/host por la API en zabbix-web:8080.
+# El dominio se agrega en Dokploy → Domains (servicio "planta", puerto 8080).
+
+services:
+  planta:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      SIM_SPEED: ${SIM_SPEED:-1}
+      RANDOM_FAULTS: ${RANDOM_FAULTS:-1}
+      CONTROL_TOKEN: ${CONTROL_TOKEN:-}
+      ZABBIX_SERVER: ${ZABBIX_SERVER:-zabbix-server}
+      ZABBIX_PORT: ${ZABBIX_PORT:-10051}
+      ZABBIX_HOST: ${ZABBIX_HOST:-Planta Aceitera}
+      ZABBIX_HOST_GROUP: ${ZABBIX_HOST_GROUP:-Manufactura}
+      ZABBIX_SEND_INTERVAL: ${ZABBIX_SEND_INTERVAL:-10}
+      ZABBIX_API_URL: ${ZABBIX_API_URL:-http://zabbix-web:8080/api_jsonrpc.php}
+      ZABBIX_API_TOKEN: ${ZABBIX_API_TOKEN:-}
+    expose:
+      - "8080"
+    networks:
+      - default
+      - zabbix
+
+networks:
+  zabbix:
+    external: true
+    # Red por defecto del compose de Zabbix en Dokploy (<appName>_default).
+    name: ${ZABBIX_NETWORK:-zabbix-testing-lab01-mybwkj_default}

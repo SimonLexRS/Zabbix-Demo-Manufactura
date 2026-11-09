@@ -35,8 +35,6 @@ flowchart LR
 6. **Sala de fuerza**: 2 calderas de 25 t/h. Si falta vapor baja la molienda; si el LEL de hexano supera 25 % el interlock detiene el extractor.
 7. **Despacho**: cisternas de aceite y camiones de harina (balanza de despacho → carga → balanza de salida).
 
-Fallas aleatorias (y manuales desde el botón **Simular falla**): disparo de caldera, fuga de hexano (LEL), atasco de noria, punto caliente en silo, balanza sin señal. Cada una dispara triggers en Zabbix.
-
 ## Endpoints
 
 | Ruta | Uso |
@@ -47,34 +45,71 @@ Fallas aleatorias (y manuales desde el botón **Simular falla**): disparo de cal
 | `/metrics` | Formato Prometheus (gauges `planta_*`) |
 | `/api/state` | Último snapshot completo |
 | `/api/stream` | SSE 5 Hz para el cliente |
-| `POST /api/control` | `{"speed":5}`, `{"fault":"boiler_trip","target":"B1"}`, `{"clearFaults":true}` |
+| `GET/POST /api/problems` | Puntos problemáticos (ver abajo) |
+| `/api/zabbix/status` | Estado del envío con Zabbix sender y del alta automática |
+| `POST /api/control` | `{"speed":5}` |
 | `/healthz` | Health check |
 
-Variables de entorno: `PORT` (8080), `SIM_SPEED` (1 = 1 min simulado por segundo), `CONTROL_TOKEN` (si se define, `/api/control` exige el header `x-control-token`; el cliente lo pide una vez).
+## Problemas: manuales y aleatorios
 
-## Despliegue en Dokploy
+Botón **Problemas** en la vista 3D (o el panel de cada equipo) con un interruptor por punto problemático:
 
-1. **Create Service → Application**.
-2. Provider **GitHub** → repo `SimonLexRS/Zabbix-Demo-Manufactura`, rama `main`.
-3. Build Type: **Dockerfile** (ruta `./Dockerfile`).
-4. **Domains**: agrega tu dominio con **Container Port `8080`** (HTTPS opcional con Let's Encrypt).
-5. (Opcional) **Environment**: `CONTROL_TOKEN=...` para que nadie más inyecte fallas.
-6. **Deploy**. Verifica `https://TU-DOMINIO/healthz`.
+| id | Problema | Efecto | Severidad |
+|---|---|---|---|
+| `bal_in_net` | Caída de red en balanza de ingreso | el camión queda **detenido sobre la balanza**, nadie más entra | Alta |
+| `bal_out_net` | Caída de red en balanza de salida | camiones detenidos en tara, se llenan las volcadoras | Alta |
+| `gate_net` | Portería sin sistema | no ingresan camiones → cola en RN4 | Promedio |
+| `samp_fault` | Calador fuera de servicio | la playa se llena | Promedio |
+| `boiler_B1` / `boiler_B2` | Disparo de caldera | menos vapor → molienda reducida | Promedio |
+| `hexane_leak` | Fuga de hexano | LEL > 25 %, interlock detiene el extractor | Desastre |
+| `noria_N1` / `noria_N2` | Atasco de noria | tolva fuera de servicio | Alta |
+| `silo_hot_S2` | Punto caliente en Silo 2 | temperatura de grano sube a ~38 °C | Alta |
+| `prep_power` | Corte de energía en preparación | molienda = 0 | Alta |
+| `ol_arm` | Brazo de carga de aceite bloqueado | cisterna detenida | Promedio |
+| `plc_ext_comm` | PLC de extracción sin comunicación | se dejan de enviar sus ítems → `nodata` en Zabbix | Alta |
 
-No hay dependencias npm: la imagen es `node:20-alpine` + el código. El estado se reinicia en cada despliegue (simulación en memoria).
+- **Manual**: queda activo hasta que lo apagues.
+- **Aleatorio** (interruptor *Fallas aleatorias*, o `RANDOM_FAULTS=0` para deshabilitar): cada 2–6 h simuladas se activa uno y se resuelve solo en 20–120 min. Si activas a mano uno aleatorio, pasa a manual.
+- En Zabbix cada uno es `planta.problem[<id>]` = 0 normal / 1 manual / 2 aleatoria, con su trigger (`last()>0`).
 
-## Configurar Zabbix (7.0+)
+API: `GET /api/problems`, `POST /api/problems` con `{"id":"bal_in_net","active":true}`, `{"randomFaults":false}` o `{"clearAll":true}`.
 
-1. **Data collection → Templates → Import** → `zabbix/template_planta_aceitera.yaml`.
-2. **Data collection → Hosts → Create host**: nombre `Planta Aceitera`, grupo a elección, template **Planta Aceitera Demo by HTTP** (no requiere interfaz ni agente).
-3. En **Macros** del host: `{$PLANTA.URL}` = `https://TU-DOMINIO` (o `http://NOMBRE-SERVICIO:8080` si Zabbix comparte red Docker con la app en Dokploy).
-4. En ~1 minuto aparecen los ítems y el descubrimiento crea silos, tanques, calderas y estaciones.
+## Envío a Zabbix con Zabbix sender (push)
 
-El template trae: 1 ítem maestro (cada `{$PLANTA.INTERVAL}` = 30 s), 42 ítems dependientes, 4 reglas LLD con 14 prototipos, triggers con umbrales en macros (`{$PLANTA.STEAM.MIN}`, `{$PLANTA.LEL.MAX}`, `{$PLANTA.SILO.TEMP.MAX}`, …) y un trigger `nodata` si la planta deja de responder.
+Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 s)** todos los datos de estado y cantidad (≈170 valores: planta, silos, tanques, calderas, estaciones y problemas) a los **ítems trapper** del host `ZABBIX_HOST`, con el protocolo nativo de Zabbix sender (TCP 10051, cabecera `ZBXD`). Las reglas LLD se envían al arrancar y cada 10 min. Al cambiar un problema se envía al instante. El estado del envío (`processed` / `failed`) se ve en la vista 3D y en `GET /api/zabbix/status`.
 
-En el panel de detalle del cliente 3D cada métrica muestra su **clave de ítem Zabbix** (por ejemplo `planta.silo.level_pct[S1]`, `planta.steam_pressure_bar`), para cruzar la vista 3D con lo que ve Zabbix.
+**Alta automática**: con `ZABBIX_API_URL` y `ZABBIX_API_TOKEN` la app importa `zabbix/template_planta_aceitera_sender.yaml` (**Planta Aceitera Demo by Zabbix sender**), crea el grupo `Manufactura` y el host `Planta Aceitera` con el template. Reintenta cada 60 s si falla. El token se crea en Zabbix → *User settings → API tokens* (usuario con permiso para importar templates y crear hosts).
 
-Para regenerar el template después de cambiar métricas: `node tools/gen-zabbix-template.mjs`.
+| Variable | Default | Uso |
+|---|---|---|
+| `ZABBIX_SERVER` | — (en compose: `zabbix-server`) | Server/proxy que recibe el sender |
+| `ZABBIX_PORT` | `10051` | Puerto trapper |
+| `ZABBIX_HOST` | `Planta Aceitera` | Nombre técnico del host en Zabbix |
+| `ZABBIX_SEND_INTERVAL` | `10` | Segundos entre envíos |
+| `ZABBIX_API_URL` | (compose: `http://zabbix-web:8080/api_jsonrpc.php`) | API para el alta automática |
+| `ZABBIX_API_TOKEN` | — | Token de API de Zabbix |
+| `ZABBIX_HOST_GROUP` | `Manufactura` | Grupo del host |
+| `ZABBIX_NETWORK` | `zabbix-testing-lab01-mybwkj_default` | Red Docker del stack de Zabbix (solo compose) |
+| `RANDOM_FAULTS` | `1` | `0` = solo fallas manuales |
+| `SIM_SPEED` | `1` | 1 min simulado por segundo |
+| `CONTROL_TOKEN` | — | Si se define, los POST exigen `x-control-token` |
+
+## Despliegue en Dokploy (Compose, junto al stack de Zabbix)
+
+1. En el proyecto donde corre Zabbix: **Create Service → Compose**, fuente **Git** `https://github.com/SimonLexRS/Zabbix-Demo-Manufactura.git`, rama `main`, ruta `./docker-compose.yml`.
+2. **Environment**: `ZABBIX_NETWORK=<appName del compose de Zabbix>_default` y `ZABBIX_API_TOKEN=...` (el resto tiene defaults).
+3. **Domains**: servicio `planta`, puerto `8080`.
+4. **Deploy** y verifica `https://TU-DOMINIO/healthz` y `https://TU-DOMINIO/api/zabbix/status`.
+
+No hay dependencias npm (`node:20-alpine`). El estado se reinicia en cada despliegue.
+
+## Alternativa: Zabbix por HTTP agent (pull)
+
+`zabbix/template_planta_aceitera.yaml` (**Planta Aceitera Demo by HTTP**) consulta `/api/metrics` con un ítem maestro y dependientes. Usa uno u otro template por host (comparten claves). Macro `{$PLANTA.URL}` = URL de la app.
+
+En el panel de detalle del cliente 3D cada métrica muestra su **clave de ítem Zabbix** (por ejemplo `planta.silo.level_pct[S1]`, `planta.station.network[BAL_IN]`), para cruzar la vista 3D con lo que ve Zabbix.
+
+Para regenerar los templates después de cambiar métricas: `node tools/gen-zabbix-template.mjs`.
 
 ## Estructura
 
@@ -84,11 +119,15 @@ js/main.js                  render, cámara, picking, seguimiento, recorrido
 js/net.js                   SSE + interpolación (o simulación local si no hay servidor)
 js/sim/layout.js            layout de planta (compartido servidor/cliente)
 js/sim/grid.js              grilla y A*
-js/sim/simulation.js        motor, proceso, camiones, operarios, triggers, métricas
+js/sim/simulation.js        motor, proceso, camiones, operarios, triggers, métricas, ítems sender
+js/sim/problems.js          catálogo de puntos problemáticos (manuales / aleatorios)
 js/world/                   materiales, constructores low-poly, entorno, vista de planta
 js/vendor/three/            Three.js r160 (MIT) vendorizado, sin CDN
 server/server.js            servidor HTTP + SSE + métricas (sin dependencias)
-zabbix/                     template Zabbix 7.0
+server/zabbix-sender.js     protocolo Zabbix sender nativo
+server/zabbix-provision.js  alta de template y host por API
+docker-compose.yml          despliegue en Dokploy junto al stack de Zabbix
+zabbix/                     templates Zabbix (sender y HTTP agent), importables en 7.0 y 8.0
 tools/                      prueba headless de la simulación y generador del template
 ```
 
