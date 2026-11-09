@@ -202,7 +202,7 @@ export class ConfigPanel {
   ruleHtml(r) {
     return `
       <div class="rule ${r.active ? 'active' : ''}" data-rule="${esc(r.id)}">
-        <div class="rule-top"><b>${esc(r.name)}</b><span class="badge ${r.active ? 'off' : ''}">${r.active ? 'ACTIVA' : `${r.fired}×`}</span><button class="cfg-switch" style="width:auto" data-act="rule-enabled" title="Habilitar">${sw(r.enabled)}</button></div>
+        <div class="rule-top"><b>${esc(r.name)}</b><span class="badge ${r.active ? 'off' : ''}">${r.active ? 'ACTIVA' : `inactiva · ${r.fired} disparos`}</span><button class="cfg-switch" style="width:auto" data-act="rule-enabled" title="Habilitar">${sw(r.enabled)}</button></div>
         <div class="rule-text">${esc(r.desc)}${r.desc ? '<br>' : ''}Si ${r.logic === 'OR' ? 'cualquiera' : 'todas'}: ${esc(r.text)}</div>
         <div class="dev-ctl">
           <label>ventana <input type="number" min="1" max="1440" data-rfield="windowMin" value="${r.windowMin}" /> min</label>
@@ -383,7 +383,7 @@ export class ConfigPanel {
         el.classList.toggle('active', r.active);
         const badge = el.querySelector('.badge');
         badge.className = `badge ${r.active ? 'off' : ''}`;
-        badge.textContent = r.active ? 'ACTIVA' : `${r.fired}×`;
+        badge.textContent = r.active ? 'ACTIVA' : `inactiva · ${r.fired} disparos`;
       }
     }
   }

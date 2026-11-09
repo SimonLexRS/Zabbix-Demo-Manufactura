@@ -196,6 +196,8 @@ function resize() {
   pixel.setSize(w, h);
   labelRenderer.setSize(w, h);
   camera.aspect = w / h;
+  // Portrait screens need a wider vertical field of view to show the whole plant.
+  camera.fov = camera.aspect < 1 ? 42 + (1 - camera.aspect) * 40 : 42;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
