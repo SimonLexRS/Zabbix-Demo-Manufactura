@@ -279,3 +279,12 @@ button.icon:hover { color: var(--text); background: var(--panel-2); }
   .hint { display: none; }
   .form { grid-template-columns: 1fr; }
 }
+
+/* ── speech bubbles of the staff ── */
+.bubble {
+  max-width: 220px; padding: 6px 10px; border-radius: 10px; background: #fdfdfb; color: #10151b;
+  font-size: 12px; font-weight: 500; line-height: 1.3; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transform: translateY(-6px); white-space: normal; text-align: left; pointer-events: none;
+}
+.bubble::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: #fdfdfb; }
+.ev.wo b { font-weight: 600; }

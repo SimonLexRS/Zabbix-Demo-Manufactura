@@ -87,6 +87,35 @@ Botón **Configuración** en la barra inferior. Los cambios se aplican en calien
   - **En Zabbix**: el template sender trae **dependencias de triggers** (p. ej. "camión detenido" depende de "caída de red en balanza"; "molienda < 70 %" de "presión de vapor baja", que depende de los disparos de caldera) y tags `scope` + `rootcause`/`symptom`. Desde el panel se crea la **correlación global** *"Planta Aceitera: la causa raíz cierra los síntomas"* (requiere token Super admin).
 - **Apariencia**: render en alta calidad por defecto; modo retro pixelado opcional (se guarda por navegador).
 
+## Realismo: tránsito, personal y órdenes de trabajo
+
+**Tránsito** (`js/sim/traffic.js`):
+- **Manejo**: los camiones aceleran y frenan con límites reales, bajan la velocidad antes de las curvas y de cada parada, y mantienen distancia de seguridad con el vehículo de adelante.
+- **Cruces**: reservan el cruce antes de entrar; si está ocupado, se detienen en la línea.
+- **Peatones**: ceden el paso a los operarios que cruzan.
+- **Sobrepaso**: adelantan a camiones detenidos por el otro carril.
+- **Ingreso**: esperan en la banquina de RN4 y entran a la portería de a uno.
+- **Destrabes**: si se forma un ciclo de espera, sale primero el que se retira de planta. Si un cruce queda trabado, el supervisor hace de señalero.
+- **Colisiones**: un camión sin frenos (falla `brake_fail`) o con el conductor distraído puede chocar. El camión chocado enciende las balizas y pone un triángulo; la vía queda bloqueada hasta que llegan mecánico, técnico de seguridad y **grúa**, y luego los camiones dañados se retiran.
+- **Casi accidentes**: si un camión frena al límite cerca de una persona se registra como casi accidente. Nunca hay atropellos.
+
+**Personal** (`js/sim/staff.js`):
+- **Gerencia y jefaturas**: gerente de planta, jefes de producción, seguridad (HSE) y mantenimiento, más el supervisor de turno.
+- **Técnicos**: TI/redes, electricista, 2 mecánicos, instrumentista, calderista y técnico de seguridad. Salen del taller en carrito de servicio.
+- **Órdenes de trabajo (OT)**: cada falla abre una OT. Se asigna al técnico libre con la especialidad correcta, que va al equipo, repara y cierra la falla (las manuales también, salvo que lo apagues en Configuración → Realismo).
+- **Supervisión**: el jefe del área va a revisar y reclama a los 15 min; el gerente escala a los 40 min. Hablan con globos de diálogo y por radio en el feed.
+- **Evacuación**: con LEL de hexano > 25 % el jefe HSE ordena evacuar al punto de encuentro.
+
+**En Zabbix**:
+- **Ítems nuevos**: `planta.traffic_*` (colisiones, frenazos, casi accidentes, vehículos detenidos, velocidad media), `planta.wo_*` (OT abiertas, en curso, completadas, MTTR, tiempo de respuesta, OT sin técnico) y `planta.staff_*` (técnicos ocupados, escalamientos, evacuación).
+- **Triggers nuevos**: casi accidente (cierre manual), tránsito detenido (depende de la colisión), OT sin técnico y evacuación.
+- **Acknowledge**: con el token de API, cada acción del personal queda registrada en el problema correspondiente:
+  - asignación = reconocimiento + mensaje;
+  - reclamos = mensajes;
+  - escalación del gerente = severidad +1;
+  - cierre de la OT = mensaje.
+- **CEP**: reglas nuevas *Bloqueo vial interno* y *Falla sin técnico asignado*.
+
 ## Envío a Zabbix con Zabbix sender (push)
 
 Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 s)** todos los datos de estado y cantidad (≈170 valores: planta, silos, tanques, calderas, estaciones y problemas) a los **ítems trapper** del host `ZABBIX_HOST`, con el protocolo nativo de Zabbix sender (TCP 10051, cabecera `ZBXD`). Las reglas LLD se envían al arrancar y cada 10 min. Al cambiar un problema se envía al instante. El estado del envío (`processed` / `failed`) se ve en la vista 3D y en `GET /api/zabbix/status`.
@@ -106,6 +135,8 @@ Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 
 | `ZABBIX_HOST_GROUP` | `Manufactura` | Grupo del host |
 | `ZABBIX_NETWORK` | `zabbix-testing-lab01-mybwkj_default` | Red Docker del stack de Zabbix (solo compose) |
 | `RANDOM_FAULTS` | `1` | `0` = solo fallas manuales |
+| `COLLISIONS` | `1` | `0` = sin colisiones (los conductores siempre frenan) |
+| `ZABBIX_ACK` | `1` | `0` = no registrar acciones del personal en Zabbix |
 | `SIM_SPEED` | `1` | 1 min simulado por segundo |
 | `CONTROL_TOKEN` | — | Clave de administrador: si se define, los POST/PUT (fallas, configuración) exigen `x-control-token` |
 | `DATA_DIR` | `/app/data` | Dónde se guarda la configuración del panel |

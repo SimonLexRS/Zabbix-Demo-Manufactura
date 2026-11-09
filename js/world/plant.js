@@ -11,6 +11,7 @@ const STATION_BUILDERS = {
   BAL_IN: () => B.scale(),
   BAL_OUT: () => B.scale(),
   BAL_D: () => B.scale(),
+  BAL_DS: () => B.scale(),
   H1: () => B.hopper(),
   H2: () => B.hopper(),
   OL: () => B.loadingRack('oil'),
@@ -395,7 +396,13 @@ export class PlantView {
     // Alarm beacons for active problems.
     const want = new Map();
     for (const p of s.problems) {
-      const pos = sourcePos(p.src);
+      // Traffic incidents follow the crash site (or the truck without brakes).
+      let pos = sourcePos(p.src);
+      if (p.src === 'VIA') {
+        const c = s.traffic?.collision;
+        const v = !c && s.vehicles.find((x) => x.brakeFail);
+        pos = c ? new THREE.Vector3(c.x, 14, c.z) : v ? new THREE.Vector3(v.x, 14, v.z) : null;
+      }
       if (!pos) continue;
       const key = p.src;
       if (!want.has(key) || want.get(key).sev < p.sev) want.set(key, { pos, sev: p.sev });
@@ -438,17 +445,34 @@ export class PlantView {
         g = B.truck(v.kind, parseInt(v.id.slice(1), 10));
         g.userData.pick = { kind: 'truck', id: v.id };
         g.traverse((o) => (o.userData.pickRoot = g));
+        g.userData.lat = 0;
         this.scene.add(g);
         this.vehicles.set(v.id, g);
       }
       const p = prevById.get(v.id) || v;
-      g.position.set(lerp(p.x, v.x, alpha), 0, lerp(p.z, v.z, alpha));
-      g.rotation.y = -lerpAngle(p.h, v.h, alpha);
+      const h = lerpAngle(p.h, v.h, alpha);
+      // Overtaking / priority passing: drive in the opposite lane (shifted to the left).
+      g.userData.lat += ((v.passing ? 3.4 : 0) - g.userData.lat) * 0.12;
+      const lx = Math.sin(h) * g.userData.lat;
+      const lz = -Math.cos(h) * g.userData.lat;
+      g.position.set(lerp(p.x, v.x, alpha) + lx, 0, lerp(p.z, v.z, alpha) + lz);
+      g.rotation.y = -h - (v.crashed ? v.tilt : 0);
       const load = g.userData.load;
       if (load) {
         const l = Math.max(0.02, v.loaded);
         load.scale.y = l * 1.6;
         load.position.y = 1.3 + (l * 1.6) / 2;
+      }
+      g.userData.brakeMat.emissiveIntensity = v.braking || v.crashed || (!v.moving && v.speedKmh === 0 && v.waitReason) ? 2.2 : 0.12;
+      // Warning triangle behind a crashed truck.
+      if (v.crashed && !g.userData.triangle) {
+        const tri = B.warningTriangle();
+        tri.position.set(-9, 0, 0);
+        g.add(tri);
+        g.userData.triangle = tri;
+      } else if (!v.crashed && g.userData.triangle) {
+        g.remove(g.userData.triangle);
+        g.userData.triangle = null;
       }
       g.userData.state = v;
     }
@@ -464,9 +488,16 @@ export class PlantView {
     for (const p of b.people) {
       let g = this.people.get(p.id);
       if (!g) {
-        g = B.person(p.helmet);
+        g = B.person(p.helmet, p.vest);
         g.userData.pick = { kind: 'person', id: p.id };
         g.traverse((o) => (o.userData.pickRoot = g));
+        if (p.kind === 'tech') {
+          const c = B.cart();
+          c.visible = false;
+          c.scale.setScalar(0.8); // the person group is scaled 1.25
+          g.add(c);
+          g.userData.cart = c;
+        }
         this.scene.add(g);
         this.people.set(p.id, g);
       }
@@ -474,7 +505,35 @@ export class PlantView {
       g.position.set(lerp(q.x, p.x, alpha), 0, lerp(q.z, p.z, alpha));
       g.rotation.y = -lerpAngle(q.h, p.h, alpha);
       g.userData.moving = p.moving;
+      // Technicians ride a cart while driving to/from a job (sitting a bit higher).
+      if (g.userData.cart) {
+        const riding = p.moving;
+        g.userData.cart.visible = riding;
+        g.userData.legs.visible = !riding;
+        g.children.forEach((c) => c !== g.userData.cart && c !== g.userData.legs && (c.position.y = (c.userData.baseY ??= c.position.y) + (riding ? 0.45 : 0)));
+      }
+      this.bubble(g, p.say);
     }
+  }
+
+  // Speech bubble above a person (CSS2D, independent of the labels toggle).
+  bubble(g, text) {
+    if (!text) {
+      if (g.userData.bubble) g.userData.bubble.visible = false;
+      return;
+    }
+    if (!g.userData.bubble) {
+      const el = document.createElement('div');
+      el.className = 'bubble';
+      const o = new CSS2DObject(el);
+      o.position.set(0, 2.6, 0);
+      o.center.set(0.5, 1);
+      g.add(o);
+      g.userData.bubble = o;
+    }
+    const o = g.userData.bubble;
+    o.visible = true;
+    if (o.element.textContent !== text) o.element.textContent = text;
   }
 
   frame(dt, speed) {
@@ -492,6 +551,12 @@ export class PlantView {
       s.scale.setScalar(1.2 + ph * 5);
       s.material.opacity = on === 0 ? 0 : (1 - ph) * 0.32 * (on / 2);
       s.visible = on > 0;
+    }
+    // Hazard lights blink on crashed trucks, trucks without brakes and the tow truck.
+    const blink = Math.sin(this.time * 9) > 0 ? 2.6 : 0;
+    for (const g of this.vehicles.values()) {
+      const v = g.userData.state;
+      if (v) g.userData.amberMat.emissiveIntensity = v.crashed || v.brakeFail || v.kind === 'tow' ? blink : 0;
     }
     // People walking animation.
     for (const g of this.people.values()) {

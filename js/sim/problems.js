@@ -26,6 +26,8 @@ export const PROBLEMS = [
   { id: 'prep_power', name: 'Corte de energía en preparación', desc: 'Se dispara el CCM: la molienda se detiene.', sev: 3, src: 'PREP', effect: { type: 'prep_power', target: 'PREP' } },
   { id: 'ol_arm', name: 'Brazo de carga de aceite bloqueado', desc: 'La cisterna queda detenida en el punto de carga.', sev: 2, src: 'OL', effect: { type: 'station_down', target: 'OL' } },
   { id: 'plc_ext_comm', name: 'PLC de extracción sin comunicación', desc: 'Se dejan de enviar los datos de extracción a Zabbix (nodata).', sev: 3, src: 'EXT', effect: { type: 'plc_comm', target: 'EXT' } },
+  { id: 'brake_fail', name: 'Falla de frenos en camión', desc: 'Un camión en marcha pierde los frenos: no se detiene detrás de otros y puede chocar.', sev: 3, src: 'VIA', effect: { type: 'brake_fail', target: 'VIA' } },
+  { id: 'vehicle_collision', name: 'Colisión en vía interna', desc: 'Choque entre camiones: la vía queda bloqueada hasta que mantenimiento y la grúa la despejen.', sev: 3, src: 'VIA', effect: { type: 'collision', target: 'VIA' } },
 ];
 
 export const PROBLEM_BY_ID = Object.fromEntries(PROBLEMS.map((p) => [p.id, p]));

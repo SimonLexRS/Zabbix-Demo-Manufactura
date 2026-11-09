@@ -34,6 +34,15 @@ export function defaultsFromEnv(env = process.env) {
     iot: { enabled: !off(env.IOT_ENABLED ?? '1'), hostPrefix: env.IOT_HOST_PREFIX || 'iot-', group: env.IOT_HOST_GROUP || 'Manufactura/IoT', randomDropouts: true, devices: {} },
     cep: { enabled: true, rules: null, zabbixCorrelation: false },
     sim: { randomFaults: !off(env.RANDOM_FAULTS), speed: num(env.SIM_SPEED, 0, 30, 1) },
+    realism: {
+      collisions: !off(env.COLLISIONS ?? '1'),
+      distractionPerHour: 0.15, // chance per truck-hour of a short driver distraction
+      speedFactor: 1,
+      techsRepairManual: true,
+      escalation1: 15,
+      escalation2: 40,
+      ackEvents: !off(env.ZABBIX_ACK ?? '1'),
+    },
   };
 }
 
@@ -87,6 +96,14 @@ export function applyPatch(cfg, patch = {}) {
   const s = patch.sim || {};
   if (s.randomFaults !== undefined) c.sim.randomFaults = !!s.randomFaults;
   if (s.speed !== undefined && [0, 1, 5, 15, 30].includes(Number(s.speed))) c.sim.speed = Number(s.speed);
+
+  const r = patch.realism || {};
+  for (const k of ['collisions', 'techsRepairManual', 'ackEvents']) if (r[k] !== undefined) c.realism[k] = !!r[k];
+  if (r.distractionPerHour !== undefined) c.realism.distractionPerHour = num(r.distractionPerHour, 0, 3, c.realism.distractionPerHour);
+  if (r.speedFactor !== undefined) c.realism.speedFactor = num(r.speedFactor, 0.5, 1.5, c.realism.speedFactor);
+  if (r.escalation1 !== undefined) c.realism.escalation1 = num(r.escalation1, 2, 240, c.realism.escalation1);
+  if (r.escalation2 !== undefined) c.realism.escalation2 = num(r.escalation2, 5, 480, c.realism.escalation2);
+  if (c.realism.escalation2 <= c.realism.escalation1) errors.push('la escalación a gerencia debe ser posterior al reclamo del jefe');
   return { config: c, errors };
 }
 

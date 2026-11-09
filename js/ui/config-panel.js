@@ -67,7 +67,30 @@ export class ConfigPanel {
   render() {
     if (this.tab === 'look') return (this.body.innerHTML = this.lookHtml());
     if (!this.data) return (this.body.innerHTML = `<p class="note">${esc(this.loadError)}</p>`);
-    this.body.innerHTML = { zabbix: this.zabbixHtml, iot: this.iotHtml, cep: this.cepHtml }[this.tab].call(this);
+    this.body.innerHTML = { zabbix: this.zabbixHtml, iot: this.iotHtml, cep: this.cepHtml, real: this.realHtml }[this.tab].call(this);
+  }
+
+  // ───────────── Realismo (tránsito y personal) ─────────────
+  realHtml() {
+    const r = this.data.realism || {};
+    const ack = this.data.status?.ack;
+    return `
+      <h3>Tránsito</h3>
+      <p class="note">Los camiones aceleran, frenan, respetan la distancia de seguridad, ceden en los cruces y a los peatones. Con colisiones activas pueden chocar si un conductor se distrae o falla un freno; la vía queda bloqueada hasta que mantenimiento y la grúa la despejen.</p>
+      <button class="cfg-switch" data-act="real-collisions"><span>Permitir colisiones</span>${sw(r.collisions)}</button>
+      <div class="form" id="rform">
+        <label>Distracciones (por camión y hora)<input name="distractionPerHour" type="number" min="0" max="3" step="0.05" value="${r.distractionPerHour}" /></label>
+        <label>Velocidad interna (×)<input name="speedFactor" type="number" min="0.5" max="1.5" step="0.05" value="${r.speedFactor}" /></label>
+        <label>Reclamo del jefe de área (min)<input name="escalation1" type="number" min="2" max="240" value="${r.escalation1}" /></label>
+        <label>Escalación a gerencia (min)<input name="escalation2" type="number" min="5" max="480" value="${r.escalation2}" /></label>
+      </div>
+      <div class="row-actions"><button class="primary" data-act="real-save">Guardar</button></div>
+      <h3>Personal</h3>
+      <button class="cfg-switch" data-act="real-techs"><span>Los técnicos reparan también las fallas manuales</span>${sw(r.techsRepairManual)}</button>
+      <p class="note">Apagado: el técnico va, trabaja y deja el equipo listo, pero la falla manual queda activa hasta que la normalices desde <b>Fallas</b>.</p>
+      <button class="cfg-switch" data-act="real-ack"><span>Registrar acciones del personal en Zabbix (acknowledge)</span>${sw(r.ackEvents)}</button>
+      <p class="note">Asignación de técnico = reconocimiento con mensaje; reclamos = mensajes; escalación del gerente = severidad +1; cierre de OT = mensaje final.</p>
+      <div class="kv"><span>Acknowledge</span><span>${ack ? `${ack.sent} enviados · ${ack.pending} en cola · ${ack.failed} con error${ack.lastError ? ` (${esc(ack.lastError)})` : ''}` : '—'}</span></div>`;
   }
 
   // ───────────── Zabbix ─────────────
@@ -317,6 +340,17 @@ export class ConfigPanel {
         const a = this.appearance.get();
         this.appearance.set({ pixel: !a.pixel });
         return this.render();
+      }
+      case 'real-collisions':
+        return this.save({ realism: { collisions: !this.data.realism.collisions } });
+      case 'real-techs':
+        return this.save({ realism: { techsRepairManual: !this.data.realism.techsRepairManual } });
+      case 'real-ack':
+        return this.save({ realism: { ackEvents: !this.data.realism.ackEvents } });
+      case 'real-save': {
+        const f = $('#rform', this.body);
+        const v = (n) => Number(f.querySelector(`[name="${n}"]`).value);
+        return this.save({ realism: { distractionPerHour: v('distractionPerHour'), speedFactor: v('speedFactor'), escalation1: v('escalation1'), escalation2: v('escalation2') } });
       }
     }
   }

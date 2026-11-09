@@ -320,13 +320,36 @@ export class UI {
 
   renderFeed(s) {
     if (!s) return;
-    const sig = this.feedTab + (this.feedTab === 'problems' ? s.problems.map((p) => p.key + p.durMin).join() : s.events[0]?.id);
+    const orders = s.orders || [];
+    const sig =
+      this.feedTab +
+      (this.feedTab === 'problems'
+        ? s.problems.map((p) => p.key + p.durMin).join()
+        : this.feedTab === 'orders'
+          ? orders.map((o) => `${o.id}${o.status}${o.ageMin}${o.etaMin}${o.repairLeftMin}`).join()
+          : s.events[0]?.id);
     $('#probCount').textContent = s.problems.length;
     $('#probCount').className = `count ${s.problems.length ? 'on' : ''}`;
+    const openWo = orders.filter((o) => !['resuelta', 'cancelada'].includes(o.status)).length;
+    $('#woCount').textContent = openWo;
+    $('#woCount').className = `count ${openWo ? 'on' : ''}`;
     if (sig === this.feedSig) return;
     this.feedSig = sig;
     const list = $('#feedList');
-    if (this.feedTab === 'problems') {
+    if (this.feedTab === 'orders') {
+      if (!orders.length) {
+        list.innerHTML = '<div class="empty">Sin órdenes de trabajo. Cada falla abre una OT y un técnico va a repararla.</div>';
+        return;
+      }
+      const cls = { abierta: 'high', asignada: 'average', en_camino: 'average', en_reparacion: 'warning', en_espera: 'info', resuelta: 'ok', cancelada: 'info' };
+      list.innerHTML = orders
+        .map((o) => {
+          const who = o.techs.length ? o.techs.join(', ') : 'sin técnico';
+          const when = o.etaMin !== null ? `llega en ${o.etaMin} min` : o.repairLeftMin !== null ? `faltan ${o.repairLeftMin} min` : `${o.ageMin} min`;
+          return `<div class="ev wo sev-${cls[o.status]} ${o.status === 'resuelta' ? 'k-resuelto' : ''}" data-src="${esc(o.problem)}"><i></i><div><b>${esc(o.id)} · ${esc(o.name)}${o.escalated ? ' ⚠' : ''}</b><small>${esc(o.statusText)} · ${esc(who)} · ${esc(when)}</small></div></div>`;
+        })
+        .join('');
+    } else if (this.feedTab === 'problems') {
       if (!s.problems.length) {
         list.innerHTML = '<div class="empty">Sin problemas activos. Usa <b>Fallas</b> para activar fallas y probar los triggers de Zabbix.</div>';
         return;
@@ -539,8 +562,12 @@ export function describe(pick, s) {
   if (kind === 'truck') {
     const v = s.vehicles.find((x) => x.id === id);
     if (!v) return null;
-    const type = { soy: 'Camión granelero · soya', oil: 'Cisterna · aceite crudo', meal: 'Camión · harina de soya' }[v.kind];
+    const type = { soy: 'Camión granelero · soya', oil: 'Cisterna · aceite crudo', meal: 'Camión · harina de soya', tow: 'Grúa de mantenimiento' }[v.kind];
+    const WAIT = { vehiculo: 'detenido detrás de otro vehículo', cruce: 'esperando paso en el cruce', peaton: 'cediendo el paso a un peatón' };
+    const drive = v.crashed ? 'Colisionado' : v.brakeFail ? 'Sin frenos' : v.passing ? 'Sobrepasando' : v.braking ? 'Frenando' : v.speedKmh > 1 ? 'En marcha' : v.waitReason ? `Detenido: ${WAIT[v.waitReason]}` : 'Detenido';
     const rows = [
+      ['Velocidad', `${v.speedKmh} km/h`, ''],
+      ['Conducción', drive, ''],
       ['Patente', v.plate, ''],
       ['Chofer', v.driver, ''],
       [v.kind === 'soy' ? 'Origen' : 'Destino', v.origin, ''],
@@ -551,11 +578,22 @@ export function describe(pick, s) {
     ];
     if (v.sample) rows.push(['Calado: humedad', `${fmt(v.sample.hum, 1)} %`, ''], ['Calado: impurezas', `${fmt(v.sample.imp, 1)} %`, '']);
     if (v.target) rows.push(['Destino de descarga', STORAGES.find((x) => x.id === v.target)?.name ?? v.target, '']);
-    return { kind: type, title: v.plate, sub: v.label, status: v.rejected ? 'Rechazado' : v.moving ? 'En movimiento' : 'Detenido', statusClass: v.rejected ? 'bad' : 'ok', rows, actions: [{ label: 'Seguir con cámara', follow: id }] };
+    const bad = v.rejected || v.crashed || v.brakeFail;
+    return {
+      kind: type, title: v.plate, sub: v.label, status: v.crashed ? 'Colisionado' : v.brakeFail ? 'Falla de frenos' : v.rejected ? 'Rechazado' : v.damaged ? 'Dañado, retirándose' : drive,
+      statusClass: bad ? 'bad' : v.damaged || v.braking ? 'warn' : 'ok', rows, actions: [{ label: 'Seguir con cámara', follow: id }],
+    };
   }
   if (kind === 'person') {
     const pr = s.people.find((x) => x.id === id);
-    return { kind: 'Operario', title: pr.name, sub: pr.role, status: pr.moving ? 'Caminando' : 'En su puesto', statusClass: 'ok', rows: [['Actividad', pr.label, ''], ['EPP', 'Casco, chaleco, botas', '']], actions: [{ label: 'Seguir con cámara', follow: id, person: true }] };
+    if (!pr) return null;
+    const KIND = { manager: 'Gerencia', chief: 'Jefatura', supervisor: 'Supervisión', tech: 'Técnico de mantenimiento', operator: 'Operario' };
+    const o = pr.order && (s.orders || []).find((x) => x.id === pr.order);
+    const rows = [['Rol', pr.role, ''], ['Actividad', pr.label, '']];
+    if (o) rows.push(['Orden de trabajo', `${o.id} · ${o.statusText}`, ''], ['Falla', o.name, `planta.problem[${o.problem}]`]);
+    if (pr.say) rows.push(['Dijo', `«${pr.say}»`, '']);
+    rows.push(['EPP', pr.kind === 'tech' ? 'Casco, chaleco, botas, guantes dieléctricos' : 'Casco, chaleco, botas', '']);
+    return { kind: KIND[pr.kind] ?? 'Personal', title: pr.name, sub: pr.role, status: pr.moving ? 'En movimiento' : o ? 'Atendiendo' : 'En su puesto', statusClass: o ? 'warn' : 'ok', rows, actions: [{ label: 'Seguir con cámara', follow: id, person: true }] };
   }
   if (kind === 'building') {
     const def = BUILDINGS.find((x) => x.id === id);

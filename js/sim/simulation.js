@@ -7,16 +7,18 @@
 //  - snapshots streamed to clients, which interpolate between them.
 // Time: 1 movement-second == 1 simulated minute (so at 1x a sim day lasts 24 real minutes).
 
-import { GRID_BOUNDS, ROADS, SITE, STATIONS, SPAWN, YARD_SLOTS, STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS } from './layout.js';
-import { Grid, offsetRight } from './grid.js';
+import { GRID_BOUNDS, ROADS, SITE, STATIONS, SPAWN, YARD_SLOTS, YARD_AISLE_Z, STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS } from './layout.js';
+import { Grid, offsetRight, lanePath } from './grid.js';
 import { PROBLEMS, PROBLEM_BY_ID, PLC_EXT_FIELDS } from './problems.js';
 import { IoTFleet } from './iot.js';
 import { CepEngine } from './cep.js';
+import { Traffic, moveTo, KMH } from './traffic.js';
+import { Staff, STAFF, LOOK, WORKSHOP_SPOT } from './staff.js';
 
 export const SEVERITY = ['Información', 'Advertencia', 'Promedio', 'Alta', 'Desastre'];
 export const NOMINAL_CRUSH = 1.05; // t/min ≈ 1500 t/day
-const TRUCK_SPEED = 11; // units per movement-second
 const PERSON_SPEED = 1.4;
+export const DEFAULT_REALISM = { collisions: true, distractionPerHour: 0.15, speedFactor: 1, techsRepairManual: true, escalation1: 15, escalation2: 40 };
 const ORIGINS = ['San Julián', 'Cuatro Cañadas', 'Pailón', 'Okinawa', 'Montero', 'Mineros', 'Guarayos', 'San Pedro', 'Fernández Alonso'];
 const FIRST = ['Juan', 'Carlos', 'Luis', 'Marco', 'Jorge', 'Pedro', 'Raúl', 'Diego', 'Mario', 'Hugo', 'Óscar', 'Wilson', 'Edwin', 'Fredy'];
 const LAST = ['Rojas', 'Vargas', 'Gutiérrez', 'Mamani', 'Suárez', 'Justiniano', 'Áñez', 'Ribera', 'Flores', 'Peña', 'Saucedo', 'Melgar'];
@@ -27,19 +29,27 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const expo = (mean) => -Math.log(1 - Math.random()) * mean;
 const plate = () => `${Math.floor(rand(1000, 5999))}${String.fromCharCode(65 + Math.floor(rand(0, 26)))}${String.fromCharCode(65 + Math.floor(rand(0, 26)))}${String.fromCharCode(65 + Math.floor(rand(0, 26)))}`;
 
-function buildRoadGrid() {
+function buildRoadGrid(withYard = true) {
   const g = new Grid(GRID_BOUNDS);
-  for (const r of ROADS) g.paintRect(...r.rect, 1);
+  for (const r of ROADS) if (withYard || !r.yard) g.paintRect(...r.rect, 1);
   return g;
 }
 
-function buildPedGrid() {
+function buildPedGrid(offRoad = false) {
   const g = new Grid(GRID_BOUNDS);
   g.paintRect(SITE.x0 + 2, SITE.z0 + 2, SITE.x1 - 2, SITE.z1 - 2, 1);
+  if (offRoad) for (const r of ROADS) g.paintRect(...r.rect, 0); // spots to stand on without blocking traffic
   const block = (x, z, w, d) => g.paintRect(x - w / 2 - 1, z - d / 2 - 1, x + w / 2 + 1, z + d / 2 + 1, 0);
   for (const b of BUILDINGS) if (b.block) b.r ? block(b.x, b.z, b.r * 2, b.r * 2) : block(b.x, b.z, b.w, b.d);
   for (const s of STORAGES) s.r ? block(s.x, s.z, s.r * 2, s.r * 2) : block(s.x, s.z, s.w, s.d);
   for (const t of [...OIL_TANKS, ...DAY_TANKS]) block(t.x, t.z, t.r * 2, t.r * 2);
+  if (!offRoad) {
+    // Walking along a road costs more: people cross roads instead of strolling down them.
+    g.cost = new Uint8Array(g.w * g.h);
+    const road = new Grid(GRID_BOUNDS);
+    for (const r of ROADS) if (!r.highway) road.paintRect(...r.rect, 1);
+    for (let i = 0; i < g.cost.length; i++) if (road.cells[i]) g.cost[i] = 6;
+  }
   return g;
 }
 
@@ -53,18 +63,20 @@ const ROUTINES = [
   { name: 'Op. Preparación', role: 'Producción', helmet: 0xffd400, stops: [[6, -60], [32, -60], [-38, -60]] },
   { name: 'Op. Extracción', role: 'Producción (zona hexano)', helmet: 0xff7a00, stops: [[6, -48], [32, -30], [22, -22], [6, -28]] },
   { name: 'Op. Sala de fuerza', role: 'Energía / Calderas', helmet: 0xff7a00, stops: [[36, -46], [36, -36], [36, -24], [36, -64]] },
-  { name: 'Supervisor de turno', role: 'Producción', helmet: 0x2b7fff, stops: [[20, -104], [6, -50], [36, -40], [10, 40], [20, -96]] },
-  { name: 'Mantenimiento', role: 'Mecánico', helmet: 0x18b26b, stops: [[-46, -100], [-38, -40], [-36, 99], [40, -74], [-46, -100]] },
+  { name: 'Supervisor de turno', role: 'Supervisión · Recepción, acopio y despacho', kind: 'supervisor', staffId: 'SUP', stops: [[20, -104], [6, -50], [36, -40], [10, 40], [20, -96]] },
 ];
 
 export class Simulation {
-  constructor({ randomFaults = true } = {}) {
+  constructor({ randomFaults = true, realism = {} } = {}) {
+    this.realism = { ...DEFAULT_REALISM, ...realism };
     this.t = 6 * 60; // minutes since day 1 00:00
     this.speed = 1;
     this.tick = 0;
     this.nextId = 1;
     this.road = buildRoadGrid();
+    this.roadNoYard = buildRoadGrid(false); // through traffic goes around the parked trucks
     this.ped = buildPedGrid();
+    this.pedOff = buildPedGrid(true);
     this.stations = Object.fromEntries(Object.values(STATIONS).map((s) => [s.id, { ...s, users: new Set(), opsToday: 0 }]));
     this.yard = YARD_SLOTS.map((s, i) => ({ ...s, i, truck: null }));
     this.storages = STORAGES.map((s) => ({ ...s, stock: s.cap * rand(0.42, 0.72), temp: rand(22, 26.5), hum: rand(11.6, 12.8), inflow: 0, outflow: 0 }));
@@ -91,16 +103,27 @@ export class Simulation {
     this.events = [];
     this.problems = new Map();
     this.flows = {};
+    this.outbox = []; // staff actions for Zabbix acknowledge (drained by the server)
+    this.collision = null;
+    this.brakeTruck = null;
+    this.pendingCollision = false;
+    this.traffic = new Traffic(this);
     this.nextSpawn = { soy: this.t + 1, oil: this.t + 20, meal: this.t + 6 };
     this.nextRandomFault = this.t + rand(45, 120);
-    for (let i = 0; i < ROUTINES.length; i++) this.spawnPerson(ROUTINES[i], i);
+    ROUTINES.forEach((r, i) => this.spawnPerson(r, i));
+    STAFF.forEach((s, i) => this.spawnPerson(s, ROUTINES.length + i));
+    this.staff = new Staff(this);
     // Start with some trucks already in the yard so the scene is alive.
     for (let i = 0; i < 4; i++) this.spawnTruck('soy', this.yard[i]);
     this.log(0, 'Simulación iniciada — turno mañana 06:00', 'sistema');
   }
 
   freshCounters() {
-    return { receivedT: 0, trucksIn: 0, rejected: 0, crushedT: 0, oilT: 0, mealT: 0, oilDispatchedT: 0, mealDispatchedT: 0, tankers: 0, mealTrucks: 0 };
+    return {
+      receivedT: 0, trucksIn: 0, rejected: 0, crushedT: 0, oilT: 0, mealT: 0, oilDispatchedT: 0, mealDispatchedT: 0, tankers: 0, mealTrucks: 0,
+      hardBrakes: 0, nearMisses: 0, collisions: 0, overtakes: 0, flagman: 0, escalations: 0, evacuations: 0,
+      woCompleted: 0, woRepairMin: 0, woResponseMin: 0, woResponded: 0,
+    };
   }
 
   // ───────────────────────────── main loop ─────────────────────────────
@@ -130,7 +153,9 @@ export class Simulation {
     this.iot.step(this, dt);
     this.updateProcess(dt);
     for (const v of this.vehicles) this.updateTruck(v, dt);
+    for (const v of this.vehicles) if (v.gone) this.traffic.releaseAll(v);
     this.vehicles = this.vehicles.filter((v) => !v.gone);
+    this.staff.update(dt);
     for (const p of this.people) this.updatePerson(p, dt);
     this.evalTriggers();
   }
@@ -162,29 +187,138 @@ export class Simulation {
     return this.hasFault('station_down', id) || (id === 'H1' && this.hasFault('noria_jam', 'N1')) || (id === 'H2' && this.hasFault('noria_jam', 'N2'));
   }
 
-  // on=true activates (manual, no expiry); on=false deactivates. Returns true if state changed.
-  setProblem(id, on, origin = 'manual') {
+  // on=true activates (manual: until switched off or repaired; random: until repaired).
+  // on=false deactivates. Returns true if state changed.
+  setProblem(id, on, origin = 'manual', by = null) {
     const p = PROBLEM_BY_ID[id];
     if (!p) return false;
     const cur = this.active.get(id);
     if (on) {
       if (cur && cur.origin === origin) return false;
       if (cur && origin === 'manual') {
-        // A random fault taken over by hand stays until switched off.
+        // A random fault taken over by hand is now a manual one.
         this.active.set(id, { origin: 'manual', since: cur.since, until: null });
         this.log(p.sev, `Falla tomada como manual: ${p.name}`, p.src, 'falla');
         return true;
       }
       if (cur) return false;
-      const until = origin === 'random' ? this.t + rand(20, 120) : null;
+      // Random faults are fixed by the technicians; the fallback only avoids eternal faults.
+      const until = origin === 'random' ? this.t + 360 : null;
       this.active.set(id, { origin, since: this.t, until });
       this.log(p.sev, `${origin === 'manual' ? 'Falla activada manualmente' : 'Falla aleatoria'}: ${p.name}`, p.src, 'falla');
+      this.onProblemOn(id, origin);
       return true;
     }
     if (!cur) return false;
     this.active.delete(id);
-    this.log(0, `Normalizado: ${p.name} (${Math.round(this.t - cur.since)} min, ${cur.origin === 'manual' ? 'manual' : 'aleatoria'})`, p.src, 'mantenimiento');
+    this.log(0, `Normalizado: ${p.name} (${Math.round(this.t - cur.since)} min, ${by ?? (cur.origin === 'manual' ? 'manual' : 'aleatoria')})`, p.src, 'mantenimiento');
+    this.onProblemOff(id);
     return true;
+  }
+
+  // ───────────── traffic incidents ─────────────
+  onProblemOn(id) {
+    if (id === 'brake_fail') this.armBrakeFailure(false);
+    if (id === 'vehicle_collision' && !this.collision) this.pendingCollision = true;
+  }
+
+  onProblemOff(id) {
+    if (id === 'brake_fail') {
+      const v = this.vehicles.find((x) => x.id === this.brakeTruck);
+      if (v) v.brakeFail = false;
+      this.brakeTruck = null;
+    }
+    if (id === 'vehicle_collision') {
+      this.pendingCollision = false;
+      if (this.collision) {
+        // Road cleared: the damaged trucks leave the plant slowly.
+        for (const v of this.vehicles) {
+          if (!v.crashed) continue;
+          v.crashed = false;
+          v.damaged = true;
+          v.brakeFail = false;
+          if (v.kind === 'tow') continue;
+          v.plan = ['GATE_OUT', v.kind === 'soy' ? 'EXIT_N' : 'EXIT_S'];
+          v.step = 0;
+          v.phase = 'request';
+        }
+        this.log(0, 'Vía despejada: los camiones dañados se retiran de planta', 'VIA', 'transito');
+        this.collision = null;
+      }
+    }
+  }
+
+  // Picks a moving truck to lose its brakes (preferably one with a vehicle ahead).
+  armBrakeFailure(forCollision) {
+    const moving = this.vehicles.filter((v) => v.phase === 'travel' && !v.crashed && !v.brakeFail && v.kind !== 'tow' && (v.speed ?? 0) > 1.5 && v.x < 64);
+    if (!moving.length) return false;
+    const scored = moving.map((v) => {
+      const { fx, fz } = this.traffic.direction(v);
+      const L = this.traffic.leader(v, fx, fz);
+      return { v, gap: L && !L.isPerson ? L.gap : 999 };
+    });
+    scored.sort((a, b) => a.gap - b.gap);
+    const best = scored[0];
+    if (forCollision && best.gap > 40) return false;
+    best.v.brakeFail = true;
+    this.brakeTruck = best.v.id;
+    this.log(3, `Falla de frenos: camión ${best.v.plate} (${best.v.driver}) sin frenos de servicio`, 'VIA', 'transito');
+    return true;
+  }
+
+  collide(a, b) {
+    for (const v of [a, b]) {
+      v.crashed = true;
+      v.speed = 0;
+      v.crashTilt = (Math.random() - 0.5) * 0.5;
+      v.label = 'Colisionado — esperando a mantenimiento';
+    }
+    a.brakeFail = false;
+    this.pendingCollision = false;
+    this.counters.collisions++;
+    this.collision = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, vehicles: [a.id, b.id], since: this.t };
+    this.log(4, `COLISIÓN: el camión ${a.plate} impactó al ${b.plate}${a.id === this.brakeTruck ? ' (sin frenos)' : ''}. Vía bloqueada`, 'VIA', 'transito');
+    const cur = this.active.get('vehicle_collision');
+    if (!cur) this.setProblem('vehicle_collision', true, 'random');
+  }
+
+  trafficMetrics() {
+    const c = this.counters;
+    const moving = this.vehicles.filter((v) => v.phase === 'travel' && v.x < 64);
+    const stopped = moving.filter((v) => v.crashed || ((v.speed ?? 0) < 0.3 && (v.blockedFor ?? 0) > 1)).length;
+    const avg = moving.length ? moving.reduce((a, v) => a + (v.speed ?? 0), 0) / moving.length : 0;
+    return {
+      traffic_collisions_today: c.collisions,
+      traffic_hard_brakes_today: c.hardBrakes,
+      traffic_near_misses_today: c.nearMisses,
+      traffic_vehicles_stopped: stopped,
+      traffic_avg_speed_kmh: Number((avg * KMH).toFixed(1)),
+      traffic_flagman_today: c.flagman,
+      traffic_overtakes_today: c.overtakes,
+    };
+  }
+
+  configureRealism(patch = {}) {
+    this.realism = { ...this.realism, ...patch };
+  }
+
+  // Tow / service truck from the workshop to the collision site.
+  spawnTow(at) {
+    const id = `T${this.nextId++}`;
+    const v = {
+      id, kind: 'tow', plate: 'GRÚA-01', driver: 'Mantenimiento (grúa)', x: -60, z: -120, h: Math.PI / 2, speed: 0,
+      path: null, pi: 0, phase: 'request', step: 0, wait: 0, station: null, slot: null, blockedFor: 0, loaded: 0,
+      label: 'Grúa en camino', since: this.t, tare: 18, net: 0, origin: 'Taller', priority: true,
+      plan: ['TOW_GO', 'TOW_WAIT', 'TOW_BACK', 'TOW_END'], towTarget: { x: at.x, z: at.z },
+    };
+    this.vehicles.push(v);
+    return id;
+  }
+
+  sendTowBack(id) {
+    const v = this.vehicles.find((x) => x.id === id);
+    if (!v) return;
+    v.towDone = true;
   }
 
   clearFaults() {
@@ -198,7 +332,9 @@ export class Simulation {
   }
 
   updateFaults() {
-    for (const [id, a] of [...this.active]) if (a.origin === 'random' && this.t >= a.until) this.setProblem(id, false);
+    for (const [id, a] of [...this.active]) if (a.origin === 'random' && this.t >= a.until) this.setProblem(id, false, 'random', 'sin atención: cerrada por tiempo máximo');
+    if (this.pendingCollision && !this.collision) this.armBrakeFailure(true);
+    if (this.active.has('brake_fail') && !this.brakeTruck) this.armBrakeFailure(false);
     if (this.randomFaults && this.t >= this.nextRandomFault) {
       const free = PROBLEMS.filter((p) => !this.active.has(p.id));
       if (free.length) this.setProblem(pick(free).id, true, 'random');
@@ -313,7 +449,7 @@ export class Simulation {
     if (this.t >= this.nextSpawn.soy) {
       this.nextSpawn.soy = this.t + expo(day ? 24 : 48);
       const freeSlot = this.yard.find((s) => !s.truck);
-      const gateBusy = this.stations.GATE.users.size >= 3 || this.stationDown('GATE');
+      const gateBusy = this.rn4Queue() >= 3 || this.stationDown('GATE');
       if (freeSlot && !gateBusy && this.vehicles.length < 18) {
         this.spawnTruck('soy');
         this.roadQueue = Math.max(0, this.roadQueue - 1);
@@ -323,7 +459,7 @@ export class Simulation {
       }
     }
     // Trucks waiting on the highway enter as soon as there is room.
-    if (this.roadQueue > 0 && this.yard.some((s) => !s.truck) && this.stations.GATE.users.size < 2 && !this.stationDown('GATE') && this.vehicles.length < 18) {
+    if (this.roadQueue > 0 && this.yard.some((s) => !s.truck) && this.rn4Queue() < 2 && !this.stationDown('GATE') && this.vehicles.length < 18) {
       this.spawnTruck('soy');
       this.roadQueue--;
     }
@@ -338,6 +474,11 @@ export class Simulation {
     }
   }
 
+  // Soy trucks already on RN4 waiting for the gate.
+  rn4Queue() {
+    return this.vehicles.filter((v) => v.kind === 'soy' && ['PREGATE', 'GATE'].includes(v.plan[v.step]) && v.phase !== 'dwell').length;
+  }
+
   spawnTruck(kind, yardSlot) {
     const id = `T${this.nextId++}`;
     const fromSouth = kind === 'soy';
@@ -346,15 +487,15 @@ export class Simulation {
       id, kind, plate: plate(), driver: `${pick(FIRST)} ${pick(LAST)}`,
       x: sp.x + (fromSouth ? 3 : -3), z: sp.z, h: fromSouth ? -Math.PI / 2 : Math.PI / 2,
       path: null, pi: 0, phase: 'request', step: 0, wait: 0, station: null, slot: null,
-      blockedFor: 0, ghostUntil: 0, loaded: kind === 'soy' ? 1 : 0, label: 'Ingresando por RN4', since: this.t,
+      blockedFor: 0, speed: 0, loaded: kind === 'soy' ? 1 : 0, label: 'Ingresando por RN4', since: this.t,
       tare: kind === 'oil' ? rand(14.5, 16) : rand(14, 16.5),
       net: kind === 'soy' ? rand(27.5, 32.5) : rand(28, 31),
       origin: kind === 'soy' ? pick(ORIGINS) : pick(['Puerto Quijarro (exportación)', 'Arica (exportación)', 'Cochabamba', 'La Paz', 'Puerto Suárez']),
     };
     if (kind === 'soy') {
-      v.plan = ['GATE', 'SLOT', 'SAMP', 'BAL_IN', 'HOPPER', 'BAL_OUT', 'GATE_OUT', 'EXIT_N'];
+      v.plan = ['PREGATE', 'GATE', 'SLOT', 'SAMP', 'BAL_IN', 'HOPPER', 'BAL_OUT', 'GATE_OUT', 'EXIT_N'];
     } else {
-      v.plan = ['GATE', 'BAL_D', kind === 'oil' ? 'OL' : 'ML', 'BAL_OUT', 'GATE_OUT', 'EXIT_S'];
+      v.plan = ['PREGATE', 'GATE', 'BAL_D', kind === 'oil' ? 'OL' : 'ML', 'BAL_DS', 'GATE_OUT', 'EXIT_S'];
     }
     if (yardSlot) {
       // Pre-placed truck waiting in the yard.
@@ -363,7 +504,7 @@ export class Simulation {
       v.x = yardSlot.x;
       v.z = yardSlot.z;
       v.h = -Math.PI / 2;
-      v.step = 1;
+      v.step = 2;
       v.phase = 'dwell';
       v.wait = rand(0, 4);
       v.label = 'En playa, esperando calador';
@@ -395,6 +536,20 @@ export class Simulation {
     return opts[0].h;
   }
 
+  // First come, first served per station: a truck may only take a station when it is
+  // the longest-waiting truck that asked for it (no starvation).
+  firstInLine(key, v) {
+    const q = (this.queues ||= {});
+    const line = (q[key] ||= []).filter((id) => this.vehicles.some((o) => o.id === id && !o.gone && o.phase === 'request'));
+    if (!line.includes(v.id)) line.push(v.id);
+    q[key] = line;
+    return line[0] === v.id;
+  }
+
+  leaveLine(key, v) {
+    if (this.queues?.[key]) this.queues[key] = this.queues[key].filter((id) => id !== v.id);
+  }
+
   // Try to reserve the next step of the plan; returns the destination or null if it must wait.
   reserveNext(v) {
     const step = v.plan[v.step];
@@ -407,15 +562,22 @@ export class Simulation {
       v.slot = slot.i;
       dest = slot;
     } else if (step === 'HOPPER') {
+      if (!this.firstInLine('HOPPER', v)) return null;
       stationId = this.chooseHopper(v);
       if (!stationId) return null;
+      this.leaveLine('HOPPER', v);
       dest = this.stations[stationId];
     } else if (step === 'EXIT_N' || step === 'EXIT_S') {
       dest = step === 'EXIT_N' ? SPAWN.north : SPAWN.south;
+    } else if (step === 'PREGATE') {
+      // Wait on the RN4 shoulder, in the driving direction, before the access road (not reserved:
+      // trucks queue behind each other on the highway).
+      dest = v.kind === 'soy' ? { x: 74, z: 86 } : { x: 74, z: 56 };
     } else if (step === 'GATE_OUT') {
       dest = this.stations.GATE; // exit lane: never reserved, so trucks leaving can never deadlock
     } else {
-      if (!this.stationFree(step)) return null;
+      if (!this.firstInLine(step, v) || !this.stationFree(step)) return null;
+      this.leaveLine(step, v);
       stationId = step;
       dest = this.stations[step];
     }
@@ -439,67 +601,108 @@ export class Simulation {
     const tgt = this.storages.find((s) => s.id === v.target);
     if (v.phase === 'travel') {
       return {
-        GATE: 'Ingresando a planta', GATE_OUT: 'Saliendo hacia portería',
+        PREGATE: 'Llegando por RN4', GATE: 'Ingresando a planta', GATE_OUT: 'Saliendo hacia portería',
         SLOT: 'Dirigiéndose a playa de espera',
         SAMP: 'Hacia el calador', BAL_IN: 'Hacia balanza de ingreso', BAL_D: 'Hacia balanza de despacho',
-        HOPPER: `Hacia ${st?.name ?? 'volcadora'}`, BAL_OUT: 'Hacia balanza de salida',
+        HOPPER: `Hacia ${st?.name ?? 'volcadora'}`, BAL_OUT: 'Hacia balanza de salida', BAL_DS: 'Hacia balanza de despacho (bruto)',
         OL: 'Hacia carga de aceite', ML: 'Hacia carga de harina',
         EXIT_N: 'Retirándose por RN4 (norte)', EXIT_S: 'Retirándose por RN4 (sur)',
       }[step];
     }
     if (v.phase === 'dwell') {
       return {
-        GATE: 'Control documental en portería', GATE_OUT: 'Control de salida en portería', SLOT: 'En playa, esperando calador',
+        PREGATE: 'En banquina de RN4, esperando turno de portería', GATE: 'Control documental en portería', GATE_OUT: 'Control de salida en portería', SLOT: 'En playa, esperando calador',
         SAMP: 'Calado: muestreo de humedad e impurezas', BAL_IN: 'Pesaje bruto', BAL_D: 'Pesaje de tara (vacío)',
-        HOPPER: `Descargando soya → ${tgt?.name ?? ''}`, BAL_OUT: v.kind === 'soy' ? 'Pesaje de tara' : 'Pesaje bruto (cargado)',
+        HOPPER: `Descargando soya → ${tgt?.name ?? ''}`, BAL_OUT: 'Pesaje de tara', BAL_DS: 'Pesaje bruto (cargado)',
         OL: 'Cargando aceite crudo', ML: 'Cargando harina de soya',
       }[step];
     }
     return {
       SAMP: 'Esperando calador', BAL_IN: 'Esperando balanza de ingreso', BAL_D: 'Esperando balanza de despacho', HOPPER: 'Esperando volcadora libre',
-      BAL_OUT: 'Esperando balanza de salida', SLOT: 'Esperando lugar en playa', OL: 'Esperando brazo de carga', ML: 'Esperando carga de harina', GATE: 'Esperando en portería',
+      BAL_OUT: 'Esperando balanza de salida', BAL_DS: 'Esperando balanza de despacho', SLOT: 'Esperando lugar en playa', OL: 'Esperando brazo de carga', ML: 'Esperando carga de harina', GATE: 'En banquina de RN4, esperando turno de portería',
     }[step] ?? 'En espera';
   }
 
   dwellTime(v, step) {
     return {
-      GATE: rand(1, 2), GATE_OUT: rand(0.5, 1), SLOT: rand(3, 10), SAMP: rand(4, 6), BAL_IN: rand(2, 3), BAL_D: rand(2, 3), HOPPER: rand(12, 16),
-      BAL_OUT: rand(2, 3), OL: rand(22, 28), ML: rand(16, 22),
+      PREGATE: 0, GATE: rand(1, 2), GATE_OUT: rand(0.5, 1), SLOT: rand(3, 10), SAMP: rand(4, 6), BAL_IN: rand(2, 3), BAL_D: rand(2, 3), HOPPER: rand(12, 16),
+      BAL_OUT: rand(2, 3), BAL_DS: rand(2, 3), OL: rand(22, 28), ML: rand(16, 22),
     }[step] ?? 0;
   }
 
+  // Tow truck: drives (with priority) to the collision, waits until the road is cleared, returns.
+  updateTow(v, dt) {
+    const step = v.plan[v.step];
+    const route = (dest) => {
+      const raw = this.road.findPath({ x: v.x, z: v.z }, dest);
+      v.path = raw ? lanePath(raw, v) : [dest];
+      v.pi = v.path.length > 1 ? 1 : 0;
+      v.phase = 'travel';
+    };
+    if (v.phase === 'request') {
+      if (step === 'TOW_GO') route(v.towTarget);
+      else if (step === 'TOW_BACK') route({ x: -60, z: -128 });
+      else v.phase = 'dwell';
+    } else if (v.phase === 'travel') {
+      const arrived = this.traffic.drive(v, dt);
+      const near = step === 'TOW_GO' && Math.hypot(v.x - v.towTarget.x, v.z - v.towTarget.z) < 24 && (v.speed ?? 0) < 0.5;
+      if (arrived || near) {
+        v.speed = 0;
+        v.step++;
+        v.phase = step === 'TOW_BACK' ? 'gone' : 'dwell';
+        if (step === 'TOW_BACK') v.gone = true;
+      }
+    } else if (v.phase === 'dwell') {
+      v.speed = 0;
+      if (v.towDone || !this.collision) {
+        v.step = v.plan.indexOf('TOW_BACK');
+        v.phase = 'request';
+      }
+    }
+    v.label = { TOW_GO: 'Grúa en camino a la colisión', TOW_WAIT: 'Grúa despejando la vía', TOW_BACK: 'Grúa regresando al taller' }[v.plan[v.step]] ?? 'Grúa';
+  }
+
   updateTruck(v, dt) {
+    if (v.kind === 'tow') return this.updateTow(v, dt);
     const step = v.plan[v.step];
     if (v.phase === 'request') {
       const dest = this.reserveNext(v);
       if (dest) {
-        const raw = this.road.findPath({ x: v.x, z: v.z }, dest);
-        v.path = raw ? offsetRight(raw, step === 'SLOT' ? 0 : 1.7) : [{ x: dest.x, z: dest.z }];
-        if (step === 'SLOT') v.path[v.path.length - 1] = { x: dest.x, z: dest.z };
+        // Roads only (through traffic never crosses the yard). Bays are entered and left in a
+        // straight line from/to the C3 road, through the gaps of the staggered rows.
+        const from = { x: v.x, z: v.z };
+        const route = (a, b) => this.roadNoYard.findPath(a, b) || this.road.findPath(a, b);
+        if (step === 'SLOT') {
+          const raw = route(from, { x: dest.x, z: YARD_AISLE_Z });
+          v.path = [...(raw ? lanePath(raw, v) : [from]), { x: dest.x, z: YARD_AISLE_Z + 6 }, { x: dest.x, z: dest.z }];
+        } else if (v.plan[v.step - 1] === 'SLOT') {
+          const exit = { x: v.x, z: YARD_AISLE_Z };
+          const raw = route(exit, dest);
+          v.path = [from, exit, ...(raw ? lanePath(raw, exit).slice(1) : [{ x: dest.x, z: dest.z }])];
+        } else {
+          const raw = route(from, dest);
+          v.path = raw ? lanePath(raw, v) : [{ x: dest.x, z: dest.z }];
+        }
         v.pi = v.path.length > 1 ? 1 : 0;
         v.phase = 'travel';
       }
     } else if (v.phase === 'travel') {
-      const dist = TRUCK_SPEED * dt;
-      if (this.isBlocked(v)) {
-        v.blockedFor += dt;
-        if (v.blockedFor > 2.5) v.ghostUntil = this.t + 1.5;
-      } else {
-        v.blockedFor = 0;
-        if (moveAlong(v, dist)) {
-          if (step === 'EXIT_N' || step === 'EXIT_S') {
-            v.gone = true;
-            if (v.station) this.stations[v.station].users.delete(v.id);
-            return;
-          }
-          v.phase = 'dwell';
-          v.wait = this.dwellTime(v, step);
-          if (step === 'SLOT') v.h = -Math.PI / 2;
-          if (step === 'HOPPER' || step === 'BAL_IN' || step === 'BAL_OUT' || step === 'BAL_D' || step === 'SAMP' || step === 'OL' || step === 'ML') {
-            this.stations[v.station].opsToday++;
-          }
+      // Acceleration, braking, crossings and collisions live in traffic.js.
+      if (this.traffic.drive(v, dt)) {
+        if (step === 'EXIT_N' || step === 'EXIT_S') {
+          v.gone = true;
+          if (v.station) this.stations[v.station].users.delete(v.id);
+          return;
+        }
+        v.phase = 'dwell';
+        v.speed = 0;
+        v.wait = this.dwellTime(v, step);
+        if (step === 'SLOT') v.h = -Math.PI / 2;
+        if (step === 'HOPPER' || step === 'BAL_IN' || step === 'BAL_OUT' || step === 'BAL_D' || step === 'BAL_DS' || step === 'SAMP' || step === 'OL' || step === 'ML') {
+          this.stations[v.station].opsToday++;
         }
       }
+      if (v.crashed) return;
     } else if (v.phase === 'dwell') {
       if (v.station && this.stationDown(v.station)) {
         // Station stopped (network down, jam, blocked arm): the truck stays frozen on it.
@@ -566,7 +769,7 @@ export class Simulation {
       v.loaded = 0;
       this.log(0, `Descarga completa ${v.plate} (${v.origin}): ${v.net.toFixed(1)} t → ${tgt?.name}`, v.station);
     }
-    if (step === 'BAL_OUT') {
+    if (step === 'BAL_OUT' || step === 'BAL_DS') {
       v.weighOut = v.kind === 'soy' ? v.tare : v.tare + v.net;
       if (v.kind === 'oil') {
         this.counters.tankers++;
@@ -580,33 +783,45 @@ export class Simulation {
     v.phase = 'request';
   }
 
-  isBlocked(v) {
-    if (this.t < v.ghostUntil || !v.path || v.pi >= v.path.length) return false;
-    const p = v.path[v.pi];
-    const dx = p.x - v.x;
-    const dz = p.z - v.z;
-    const l = Math.hypot(dx, dz) || 1;
-    const fx = dx / l;
-    const fz = dz / l;
-    for (const o of this.vehicles) {
-      if (o === v || o.gone || (o.plan[o.step] === 'SLOT' && o.phase !== 'travel')) continue;
-      const vx = o.x - v.x;
-      const vz = o.z - v.z;
-      const fwd = vx * fx + vz * fz;
-      if (fwd <= 0.5 || fwd > 12.5) continue;
-      const lat = Math.abs(-vx * fz + vz * fx);
-      if (lat < 2.6) return true;
-    }
-    return false;
-  }
-
   // ───────────────────────────── people ─────────────────────────────
   spawnPerson(r, i) {
-    const [x, z] = r.stops[0];
-    this.people.push({ id: `P${i + 1}`, name: r.name, role: r.role, helmet: r.helmet, stops: r.stops, si: 0, x, z, h: 0, path: null, pi: 0, wait: rand(0, 5), moving: false, label: 'En su puesto' });
+    const kind = r.kind ?? 'operator';
+    const look = LOOK[kind];
+    let [x, z] = r.stops?.[0] ?? WORKSHOP_SPOT;
+    if (kind === 'tech') {
+      x += (i % 4) * 3 - 4;
+      z += Math.floor(i / 4) * 3 - 2;
+    }
+    this.people.push({
+      id: `P${i + 1}`, staffId: r.id ?? r.staffId ?? null, name: r.name, role: r.role, kind, skills: r.skills ?? [], areas: r.areas ?? [],
+      zone: /Extracción/.test(r.name) ? 'extraccion' : null, helmet: r.helmet ?? look.helmet, vest: r.vest ?? look.vest,
+      stops: r.stops ?? null, si: 0, x, z, h: 0, path: null, pi: 0, wait: rand(0, 5), moving: false,
+      // Technicians move in a service cart; managers walk briskly.
+      speed: kind === 'tech' ? 7 : kind === 'manager' || kind === 'chief' ? 3 : PERSON_SPEED,
+      label: 'En su puesto', task: null, say: null,
+    });
   }
 
   updatePerson(p, dt) {
+    // Staff with a task (work order, inspection, evacuation): walk there and stay.
+    if (p.task) {
+      if (p.path) {
+        p.moving = true;
+        if (moveAlong(p, p.speed * dt)) {
+          p.path = null;
+          p.moving = false;
+          if (p.task.type === 'return') p.task = null;
+        }
+      } else p.moving = false;
+      p.label = this.personLabel(p);
+      return;
+    }
+    if (!p.stops) {
+      // Idle technicians wait in the workshop.
+      p.moving = false;
+      p.label = 'En el taller, disponible';
+      return;
+    }
     if (p.wait > 0) {
       p.wait -= dt;
       p.moving = false;
@@ -620,12 +835,27 @@ export class Simulation {
       p.label = `Caminando (ronda ${p.si + 1}/${p.stops.length})`;
     }
     p.moving = true;
-    if (moveAlong(p, PERSON_SPEED * dt)) {
+    if (moveAlong(p, p.speed * dt)) {
       p.path = null;
       p.wait = rand(4, 14);
       p.moving = false;
-      p.label = 'Inspección en sitio';
+      p.label = p.kind === 'operator' ? 'Inspección en sitio' : 'Recorrida de planta';
     }
+  }
+
+  personLabel(p) {
+    const t = p.task;
+    if (!t) return p.kind === 'tech' ? 'En el taller, disponible' : 'En su puesto';
+    const o = t?.order && this.staff.orders.find((x) => x.id === t.order);
+    if (t.type === 'evac') return 'Evacuando al punto de encuentro';
+    if (t.type === 'return') return 'Regresando al taller';
+    if (t.type === 'inspect') return p.path ? `Va a revisar: ${o?.name ?? ''}` : `Revisando en sitio: ${o?.name ?? ''}`;
+    if (t.type === 'work') {
+      if (!o) return 'Trabajando';
+      if (p.path) return `${o.id}: en camino a ${o.short}`;
+      return o.status === 'en_reparacion' ? `${o.id}: reparando ${o.short}` : o.status === 'en_espera' ? `${o.id}: reparado, espera normalización` : `${o.id}: en sitio, esperando equipo`;
+    }
+    return 'En tarea';
   }
 
   // ───────────────────────────── triggers (Zabbix-like) ─────────────────────────────
@@ -703,9 +933,17 @@ export class Simulation {
       vehicles: this.vehicles.map((v) => ({
         id: v.id, kind: v.kind, x: r2(v.x), z: r2(v.z), h: r2(v.h), loaded: r2(v.loaded), label: v.label, plate: v.plate,
         driver: v.driver, origin: v.origin, net: r1(v.net), tare: r1(v.tare), target: v.target ?? null, sample: v.sample ?? null,
-        rejected: !!v.rejected, moving: v.phase === 'travel' && v.blockedFor === 0, sinceMin: Math.round(this.t - v.since),
+        rejected: !!v.rejected, moving: (v.speed ?? 0) > 0.3, sinceMin: Math.round(this.t - v.since),
+        speedKmh: Math.round((v.speed ?? 0) * KMH), braking: !!v.braking, crashed: !!v.crashed, damaged: !!v.damaged, brakeFail: !!v.brakeFail,
+        passing: !!v.passing, waitReason: v.waitReason ?? null, tilt: v.crashTilt ?? 0,
       })),
-      people: this.people.map((p) => ({ id: p.id, name: p.name, role: p.role, helmet: p.helmet, x: r2(p.x), z: r2(p.z), h: r2(p.h), moving: p.moving, label: p.label })),
+      people: this.people.map((p) => ({
+        id: p.id, name: p.name, role: p.role, kind: p.kind, helmet: p.helmet, vest: p.vest, x: r2(p.x), z: r2(p.z), h: r2(p.h), moving: p.moving, label: p.label,
+        say: p.say?.text ?? null, order: p.task?.order ?? null,
+      })),
+      orders: this.staff.snapshot(),
+      traffic: { ...this.trafficMetrics(), collision: this.collision ? { x: r1(this.collision.x), z: r1(this.collision.z) } : null, evacuation: this.staff.evacuating },
+      realism: this.realism,
       storages: this.storages.map((s) => ({ id: s.id, stock: Math.round(s.stock), cap: s.cap, pct: r1((s.stock / s.cap) * 100), temp: r1(s.temp), hum: r1(s.hum), outflow: r2(s.outflow) })),
       tanks: this.tanks.map((t) => ({ id: t.id, stock: Math.round(t.stock), cap: t.cap, pct: r1((t.stock / t.cap) * 100), temp: r1(t.temp), filling: t.inflow > 0 })),
       dayTanks: this.dayTanks.map((d) => ({ id: d.id, pct: r1(d.pct) })),
@@ -753,6 +991,8 @@ export class Simulation {
         meal_residual_hexane_ppm: r(p.residualHexane, 0), meal_residual_oil_pct: r(p.residualOil), meal_protein_pct: r(p.mealProtein), meal_humidity_pct: r(p.mealHumidity),
         trucks_in_plant: k.trucksInPlant, trucks_waiting_yard: k.trucksWaitingYard, trucks_waiting_road: k.roadQueue,
         tankers_dispatched_today: k.tankers, meal_trucks_dispatched_today: k.mealTrucks, problems_active: k.problems,
+        ...this.trafficMetrics(),
+        ...this.staff.metrics(),
       },
       silos: obj(this.storages, (s) => ({ name: s.name, type: s.kind, level_pct: r((s.stock / s.cap) * 100), stock_t: r(s.stock, 1), capacity_t: s.cap, temp_c: r(s.temp, 1), humidity_pct: r(s.hum) })),
       tanks: obj(this.tanks, (t) => ({ name: t.name, level_pct: r((t.stock / t.cap) * 100), stock_t: r(t.stock, 1), capacity_t: t.cap, temp_c: r(t.temp, 1) })),

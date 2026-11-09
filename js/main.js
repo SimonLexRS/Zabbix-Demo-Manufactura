@@ -10,6 +10,7 @@ import { UI } from './ui/ui.js';
 import { ConfigPanel } from './ui/config-panel.js';
 import { PixelRenderer, loadAppearance, saveAppearance } from './world/pixel.js';
 import { STORAGES, OIL_TANKS, BUILDINGS, STATIONS, BOILERS } from './sim/layout.js';
+import { PROBLEM_BY_ID } from './sim/problems.js';
 
 const container = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -162,6 +163,13 @@ function select(pick) {
 }
 
 function pickForSource(src) {
+  if (PROBLEM_BY_ID[src]) src = PROBLEM_BY_ID[src].src; // work orders point to their problem
+  if (src === 'VIA') {
+    // Traffic incident: the crashed truck, or the one without brakes.
+    const s = snaps.latest;
+    const v = s?.vehicles.find((x) => x.crashed) || s?.vehicles.find((x) => x.brakeFail);
+    return v ? { kind: 'truck', id: v.id } : null;
+  }
   if (STORAGES.some((s) => s.id === src)) return { kind: 'storage', id: src };
   if (OIL_TANKS.some((s) => s.id === src)) return { kind: 'tank', id: src };
   if (src === 'TA') return { kind: 'tank', id: 'TA2' };

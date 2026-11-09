@@ -52,6 +52,7 @@ export class Grid {
     this.w = Math.ceil((maxX - minX) / cell);
     this.h = Math.ceil((maxZ - minZ) / cell);
     this.cells = new Uint8Array(this.w * this.h);
+    this.cost = null; // optional extra cost per cell (e.g. pedestrians avoid walking along roads)
   }
 
   idx(i, j) {
@@ -142,7 +143,7 @@ export class Grid {
         const nn = nj * W + ni;
         if (closed[nn]) continue;
         const turn = dirOf[n] !== -1 && dirOf[n] !== d ? 0.6 : 0;
-        const c = cost[n] + 1 + turn;
+        const c = cost[n] + 1 + turn + (this.cost ? this.cost[nn] : 0);
         if (c < cost[nn]) {
           cost[nn] = c;
           prev[nn] = n;
@@ -201,4 +202,17 @@ export function offsetRight(pts, off) {
 function norm(x, z) {
   const l = Math.hypot(x, z) || 1;
   return { x: x / l, z: z / l };
+}
+
+// Lane path for a vehicle: shift the route to the right-hand lane and move into it
+// within the first few metres (instead of drifting diagonally along the whole segment).
+export function lanePath(raw, from, off = 1.7) {
+  if (!raw || raw.length < 2) return raw;
+  const lane = offsetRight(raw, off);
+  const dx = raw[1].x - raw[0].x;
+  const dz = raw[1].z - raw[0].z;
+  const len = Math.hypot(dx, dz) || 1;
+  const k = Math.min(6, len / 2) / len;
+  const merge = { x: lane[0].x + dx * k, z: lane[0].z + dz * k };
+  return [{ x: from.x, z: from.z }, merge, ...lane.slice(1)];
 }

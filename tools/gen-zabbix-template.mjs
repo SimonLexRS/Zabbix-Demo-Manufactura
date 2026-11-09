@@ -62,6 +62,22 @@ const PLANT = [
   ['tankers_dispatched_today', 'Cisternas despachadas hoy', '', 'UNSIGNED', 'despacho'],
   ['meal_trucks_dispatched_today', 'Camiones de harina despachados hoy', '', 'UNSIGNED', 'despacho'],
   ['problems_active', 'Problemas activos (simulador)', '', 'UNSIGNED', 'general'],
+  ['traffic_collisions_today', 'Tránsito: colisiones hoy', '', 'UNSIGNED', 'transito'],
+  ['traffic_hard_brakes_today', 'Tránsito: frenazos hoy', '', 'UNSIGNED', 'transito'],
+  ['traffic_near_misses_today', 'Tránsito: casi accidentes con peatones hoy', '', 'UNSIGNED', 'transito'],
+  ['traffic_vehicles_stopped', 'Tránsito: vehículos detenidos en vías', '', 'UNSIGNED', 'transito'],
+  ['traffic_avg_speed_kmh', 'Tránsito: velocidad media', 'km/h', 'FLOAT', 'transito'],
+  ['traffic_flagman_today', 'Tránsito: intervenciones de señalero hoy', '', 'UNSIGNED', 'transito'],
+  ['traffic_overtakes_today', 'Tránsito: sobrepasos hoy', '', 'UNSIGNED', 'transito'],
+  ['wo_open', 'Mantenimiento: órdenes de trabajo abiertas', '', 'UNSIGNED', 'mantenimiento'],
+  ['wo_in_progress', 'Mantenimiento: OT en curso', '', 'UNSIGNED', 'mantenimiento'],
+  ['wo_completed_today', 'Mantenimiento: OT completadas hoy', '', 'UNSIGNED', 'mantenimiento'],
+  ['wo_mttr_min', 'Mantenimiento: tiempo medio de reparación (MTTR)', 'm', 'FLOAT', 'mantenimiento'],
+  ['wo_response_min', 'Mantenimiento: tiempo medio de respuesta', 'm', 'FLOAT', 'mantenimiento'],
+  ['wo_unassigned_max_min', 'Mantenimiento: OT más antigua sin técnico', 'm', 'FLOAT', 'mantenimiento'],
+  ['staff_technicians_busy', 'Personal: técnicos ocupados', '', 'UNSIGNED', 'personal'],
+  ['staff_escalations_today', 'Personal: escalamientos a gerencia hoy', '', 'UNSIGNED', 'personal'],
+  ['staff_evacuation', 'Personal: evacuación en curso', '', 'UNSIGNED', 'seguridad'],
 ];
 
 const macros = [
@@ -77,6 +93,8 @@ const macros = [
   ['{$PLANTA.SILO.TEMP.MAX}', '32', 'Temperatura máxima de grano (°C).'],
   ['{$PLANTA.TANK.LEVEL.MAX}', '95', 'Nivel máximo de tanque de aceite (%).'],
   ['{$PLANTA.NODATA}', '2m', 'Tiempo sin datos antes de alertar.'],
+  ['{$PLANTA.TRAFFIC.STOPPED.MAX}', '3', 'Vehículos detenidos en vías internas antes de alertar.'],
+  ['{$PLANTA.WO.UNASSIGNED.MAX}', '15', 'Minutos de una OT sin técnico antes de alertar.'],
 ];
 
 // Zabbix 8.0 ships the global macro {$TRAPPER.ALLOWED_HOSTS} = 127.0.0.1,::1, so trapper
@@ -113,6 +131,10 @@ function build(mode) {
     meal_residual_hexane_ppm: [{ expression: `min(${ref('planta.meal_residual_hexane_ppm')},5m)>{$PLANTA.MEAL.HEXANE.MAX}`, _id: 'meal_hex', name: 'Hexano residual en harina > {$PLANTA.MEAL.HEXANE.MAX} ppm', priority: 'AVERAGE' }],
     oil_stock_pct: [{ expression: `last(${ref('planta.oil_stock_pct')})>{$PLANTA.OIL.MAX}`, _id: 'oil_full', name: 'Tanques de aceite sobre {$PLANTA.OIL.MAX}%', priority: 'WARNING' }],
     trucks_waiting_road: [{ expression: `last(${ref('planta.trucks_waiting_road')})>{$PLANTA.ROADQ.MAX}`, _id: 'road_queue', name: 'Cola de camiones en RN4 (> {$PLANTA.ROADQ.MAX})', priority: 'WARNING' }],
+    traffic_near_misses_today: [{ expression: `change(${ref('planta.traffic_near_misses_today')})>0`, _id: 'near_miss', name: 'Casi accidente entre camión y peatón', priority: 'HIGH', manual_close: 'YES', description: 'Un camión frenó al límite o sin frenos cerca de una persona. Revisar con HSE y cerrar manualmente.' }],
+    traffic_vehicles_stopped: [{ expression: `min(${ref('planta.traffic_vehicles_stopped')},3m)>{$PLANTA.TRAFFIC.STOPPED.MAX}`, _id: 'traffic_stopped', name: 'Tránsito detenido en vías internas (> {$PLANTA.TRAFFIC.STOPPED.MAX} vehículos)', priority: 'AVERAGE' }],
+    wo_unassigned_max_min: [{ expression: `last(${ref('planta.wo_unassigned_max_min')})>{$PLANTA.WO.UNASSIGNED.MAX}`, _id: 'wo_unassigned', name: 'Orden de trabajo sin técnico por más de {$PLANTA.WO.UNASSIGNED.MAX} min', priority: 'AVERAGE' }],
+    staff_evacuation: [{ expression: `last(${ref('planta.staff_evacuation')})=1`, _id: 'evacuation', name: 'Evacuación en curso por alarma de gas', priority: 'DISASTER' }],
   };
 
   const items = [];
@@ -146,7 +168,8 @@ function build(mode) {
     items.push({
       uuid: uuid(`problem:${p.id}`), name: `Falla: ${p.name}`, ...src(key, `$.problem_states.${p.id}`), value_type: 'UNSIGNED', valuemap: { name: 'Origen de falla' },
       description: p.desc, tags: [{ tag: 'component', value: 'fallas' }, { tag: 'scope', value: p.src }],
-      triggers: [{ _id: `problem:${p.id}`, uuid: uuid(`t:problem:${p.id}`), expression: `last(${ref(key)})>0`, name: `${p.name} ({ITEM.LASTVALUE})`, priority: PRIORITY[p.sev], description: p.desc }],
+      // Tag "problem" lets the app find this event to acknowledge it with staff actions.
+      triggers: [{ _id: `problem:${p.id}`, uuid: uuid(`t:problem:${p.id}`), expression: `last(${ref(key)})>0`, name: `${p.name} ({ITEM.LASTVALUE})`, priority: PRIORITY[p.sev], description: p.desc, tags: [{ tag: 'problem', value: p.id }] }],
     });
   }
 
@@ -226,13 +249,13 @@ function build(mode) {
   const SCOPE = {
     steam_low: 'energia', crush_low: 'produccion', meal_hex: 'produccion', lel_disaster: 'extraccion', lel_warn: 'extraccion', extractor_stopped: 'extraccion',
     plc_nodata: 'extraccion', hexane_low: 'extraccion', oil_full: 'despacho', road_queue: 'recepcion', trucks_stopped: 'recepcion', silo_temp: 'acopio',
+    near_miss: 'transito', traffic_stopped: 'transito', wo_unassigned: 'mantenimiento', evacuation: 'extraccion',
   };
-  const PROBLEM_SCOPE = { BAL_IN: 'recepcion', BAL_OUT: 'recepcion', GATE: 'recepcion', SAMP: 'recepcion', N1: 'recepcion', N2: 'recepcion', B1: 'energia', B2: 'energia', EXT: 'extraccion', S2: 'acopio', PREP: 'produccion', OL: 'despacho' };
+  const PROBLEM_SCOPE = { BAL_IN: 'recepcion', BAL_OUT: 'recepcion', GATE: 'recepcion', SAMP: 'recepcion', N1: 'recepcion', N2: 'recepcion', B1: 'energia', B2: 'energia', EXT: 'extraccion', S2: 'acopio', PREP: 'produccion', OL: 'despacho', VIA: 'transito' };
   for (const p of PROBLEMS) SCOPE[`problem:${p.id}`] = PROBLEM_SCOPE[p.src] || 'planta';
   const recepcionCauses = ['bal_in_net', 'bal_out_net', 'gate_net', 'samp_fault', 'noria_N1', 'noria_N2'].map((id) => `problem:${id}`);
   const DEPS = {
     trucks_stopped: [...recepcionCauses, 'problem:ol_arm'],
-    road_queue: recepcionCauses,
     steam_low: ['problem:boiler_B1', 'problem:boiler_B2'],
     crush_low: ['steam_low', 'problem:prep_power', 'problem:hexane_leak', 'extractor_stopped'],
     meal_hex: ['steam_low'],
@@ -240,6 +263,9 @@ function build(mode) {
     lel_warn: ['lel_disaster'],
     plc_nodata: ['problem:plc_ext_comm'],
     silo_temp: ['problem:silo_hot_S2'],
+    traffic_stopped: ['problem:vehicle_collision'],
+    road_queue: [...recepcionCauses, 'problem:vehicle_collision'],
+    evacuation: [],
   };
   const allTriggers = [
     ...items.flatMap((i) => i.triggers || []),

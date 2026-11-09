@@ -44,6 +44,16 @@ export const DEFAULT_RULES = [
     ],
   },
   {
+    id: 'bloqueo_vial', name: 'Bloqueo vial interno', sev: 3, logic: 'AND', windowMin: 10, enabled: true,
+    desc: 'Colisión en una vía interna con varios vehículos detenidos detrás.',
+    conditions: [{ type: 'problem', id: 'vehicle_collision' }, { type: 'metric', key: 'planta.traffic_vehicles_stopped', op: '>', value: 2 }],
+  },
+  {
+    id: 'falla_sin_atender', name: 'Falla sin técnico asignado', sev: 2, logic: 'OR', windowMin: 5, enabled: true,
+    desc: 'Una orden de trabajo lleva más de 20 min sin técnico disponible.',
+    conditions: [{ type: 'metric', key: 'planta.wo_unassigned_max_min', op: '>', value: 20 }],
+  },
+  {
     id: 'calidad_grano', name: 'Riesgo de calidad de grano en Silo 2', sev: 3, logic: 'AND', windowMin: 60, enabled: true,
     desc: 'Temperatura de grano sobre 32 °C con humedad sobre 12 %.',
     conditions: [
@@ -66,6 +76,13 @@ export const CEP_METRICS = [
   ['planta.hexane_stock_pct', 'Tanque de hexano (%)'],
   ['planta.meal_residual_hexane_ppm', 'Hexano residual en harina (ppm)'],
   ['planta.soy_stock_pct', 'Ocupación de acopio (%)'],
+  ['planta.traffic_vehicles_stopped', 'Vehículos detenidos en vías'],
+  ['planta.traffic_avg_speed_kmh', 'Velocidad media (km/h)'],
+  ['planta.traffic_near_misses_today', 'Casi accidentes hoy'],
+  ['planta.traffic_hard_brakes_today', 'Frenazos hoy'],
+  ['planta.wo_open', 'Órdenes de trabajo abiertas'],
+  ['planta.wo_unassigned_max_min', 'OT sin técnico (min)'],
+  ['planta.staff_technicians_busy', 'Técnicos ocupados'],
   ['planta.station.trucks_stopped[BAL_IN]', 'Camiones detenidos en balanza de ingreso'],
   ['planta.station.trucks_stopped[BAL_OUT]', 'Camiones detenidos en balanza de salida'],
   ['planta.station.available[H1]', 'Tolva 1 disponible (0/1)'],

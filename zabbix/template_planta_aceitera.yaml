@@ -242,6 +242,8 @@ zabbix_export:
                   expression: 'last(/Planta Aceitera Demo by HTTP/planta.problem[noria_N1])>0'
                 - name: 'Atasco en Noria 2 ({ITEM.LASTVALUE})'
                   expression: 'last(/Planta Aceitera Demo by HTTP/planta.problem[noria_N2])>0'
+                - name: 'Colisión en vía interna ({ITEM.LASTVALUE})'
+                  expression: 'last(/Planta Aceitera Demo by HTTP/planta.problem[vehicle_collision])>0'
         - uuid: '2da6eaf10ed64d63a4891b6bb8ebd920'
           name: 'Planta: Tasa de molienda'
           type: 'DEPENDENT'
@@ -856,6 +858,295 @@ zabbix_export:
           tags:
             - tag: 'component'
               value: 'general'
+        - uuid: '643dcc1459d34ac999f3739362652c79'
+          name: 'Planta: Tránsito: colisiones hoy'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_collisions_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_collisions_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+        - uuid: '24e0b3f330c4475bb29e47d5fb2cd465'
+          name: 'Planta: Tránsito: frenazos hoy'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_hard_brakes_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_hard_brakes_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+        - uuid: '6a211a14b9044628911f8ed6e91631b2'
+          name: 'Planta: Tránsito: casi accidentes con peatones hoy'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_near_misses_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_near_misses_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+          triggers:
+            - uuid: 'd22b2173acc043fcab89a5f4c4477f85'
+              expression: 'change(/Planta Aceitera Demo by HTTP/planta.traffic_near_misses_today)>0'
+              name: 'Planta: Casi accidente entre camión y peatón'
+              priority: 'HIGH'
+              manual_close: 'YES'
+              description: 'Un camión frenó al límite o sin frenos cerca de una persona. Revisar con HSE y cerrar manualmente.'
+              tags:
+                - tag: 'scope'
+                  value: 'transito'
+                - tag: 'symptom'
+                  value: 'yes'
+        - uuid: '2830324506c24c3fb9f95faa86befe7c'
+          name: 'Planta: Tránsito: vehículos detenidos en vías'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_vehicles_stopped'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_vehicles_stopped'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+          triggers:
+            - uuid: 'c7507641e09c479aa63670fd85ba74c8'
+              expression: 'min(/Planta Aceitera Demo by HTTP/planta.traffic_vehicles_stopped,3m)>{$PLANTA.TRAFFIC.STOPPED.MAX}'
+              name: 'Planta: Tránsito detenido en vías internas (> {$PLANTA.TRAFFIC.STOPPED.MAX} vehículos)'
+              priority: 'AVERAGE'
+              tags:
+                - tag: 'scope'
+                  value: 'transito'
+                - tag: 'symptom'
+                  value: 'yes'
+              dependencies:
+                - name: 'Colisión en vía interna ({ITEM.LASTVALUE})'
+                  expression: 'last(/Planta Aceitera Demo by HTTP/planta.problem[vehicle_collision])>0'
+        - uuid: 'a219943cf2a5494ab499fa47f0ddf2e3'
+          name: 'Planta: Tránsito: velocidad media'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_avg_speed_kmh'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_avg_speed_kmh'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+          units: 'km/h'
+        - uuid: 'd7999ea9c4e44d6e8315db0d856b9067'
+          name: 'Planta: Tránsito: intervenciones de señalero hoy'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_flagman_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_flagman_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+        - uuid: '8afa48a29b03486ca4053f18b811547e'
+          name: 'Planta: Tránsito: sobrepasos hoy'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_overtakes_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_overtakes_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+        - uuid: 'f5b0b550b5544a61bcac1cc2682d9641'
+          name: 'Planta: Mantenimiento: órdenes de trabajo abiertas'
+          type: 'DEPENDENT'
+          key: 'planta.wo_open'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.wo_open'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'mantenimiento'
+        - uuid: '34ce136aaea3406a9b08354d5e1d9753'
+          name: 'Planta: Mantenimiento: OT en curso'
+          type: 'DEPENDENT'
+          key: 'planta.wo_in_progress'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.wo_in_progress'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'mantenimiento'
+        - uuid: '71ce314e054b44e4b16c9aebef636d1f'
+          name: 'Planta: Mantenimiento: OT completadas hoy'
+          type: 'DEPENDENT'
+          key: 'planta.wo_completed_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.wo_completed_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'mantenimiento'
+        - uuid: 'b1f56e8f47e042b097fdf8822133b375'
+          name: 'Planta: Mantenimiento: tiempo medio de reparación (MTTR)'
+          type: 'DEPENDENT'
+          key: 'planta.wo_mttr_min'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.wo_mttr_min'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'mantenimiento'
+          units: 'm'
+        - uuid: 'bb5e7733c640493e8742bf2594ebd1fb'
+          name: 'Planta: Mantenimiento: tiempo medio de respuesta'
+          type: 'DEPENDENT'
+          key: 'planta.wo_response_min'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.wo_response_min'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'mantenimiento'
+          units: 'm'
+        - uuid: 'ee9a9f73a38f442387ffc7b9a340b890'
+          name: 'Planta: Mantenimiento: OT más antigua sin técnico'
+          type: 'DEPENDENT'
+          key: 'planta.wo_unassigned_max_min'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.wo_unassigned_max_min'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'mantenimiento'
+          units: 'm'
+          triggers:
+            - uuid: '63e2b658933943a8b29658f3272e5807'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.wo_unassigned_max_min)>{$PLANTA.WO.UNASSIGNED.MAX}'
+              name: 'Planta: Orden de trabajo sin técnico por más de {$PLANTA.WO.UNASSIGNED.MAX} min'
+              priority: 'AVERAGE'
+              tags:
+                - tag: 'scope'
+                  value: 'mantenimiento'
+                - tag: 'symptom'
+                  value: 'yes'
+        - uuid: '30fac6b4f6c740ee88034407a93cc160'
+          name: 'Planta: Personal: técnicos ocupados'
+          type: 'DEPENDENT'
+          key: 'planta.staff_technicians_busy'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.staff_technicians_busy'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'personal'
+        - uuid: 'ee67e5ce45f24550b1714bfbb5433ff3'
+          name: 'Planta: Personal: escalamientos a gerencia hoy'
+          type: 'DEPENDENT'
+          key: 'planta.staff_escalations_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.staff_escalations_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'personal'
+        - uuid: '6d1b60117b96448682ae625c07b09107'
+          name: 'Planta: Personal: evacuación en curso'
+          type: 'DEPENDENT'
+          key: 'planta.staff_evacuation'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.staff_evacuation'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'seguridad'
+          triggers:
+            - uuid: '6c9e6792b0374495b46c949c0322b4e7'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.staff_evacuation)=1'
+              name: 'Planta: Evacuación en curso por alarma de gas'
+              priority: 'DISASTER'
+              tags:
+                - tag: 'scope'
+                  value: 'extraccion'
+                - tag: 'symptom'
+                  value: 'yes'
         - uuid: '3784126badf24341bfb2de87efd894a0'
           name: 'Falla: Caída de red en balanza de ingreso'
           type: 'DEPENDENT'
@@ -883,6 +1174,8 @@ zabbix_export:
               priority: 'HIGH'
               description: 'El camión queda detenido sobre la balanza y no ingresa nadie más.'
               tags:
+                - tag: 'problem'
+                  value: 'bal_in_net'
                 - tag: 'scope'
                   value: 'recepcion'
                 - tag: 'rootcause'
@@ -914,6 +1207,8 @@ zabbix_export:
               priority: 'HIGH'
               description: 'Camiones detenidos en tara; las volcadoras se llenan.'
               tags:
+                - tag: 'problem'
+                  value: 'bal_out_net'
                 - tag: 'scope'
                   value: 'recepcion'
                 - tag: 'rootcause'
@@ -945,6 +1240,8 @@ zabbix_export:
               priority: 'AVERAGE'
               description: 'No se autoriza el ingreso: cola de camiones en RN4.'
               tags:
+                - tag: 'problem'
+                  value: 'gate_net'
                 - tag: 'scope'
                   value: 'recepcion'
                 - tag: 'rootcause'
@@ -976,6 +1273,8 @@ zabbix_export:
               priority: 'AVERAGE'
               description: 'No se muestrea: la playa de espera se llena.'
               tags:
+                - tag: 'problem'
+                  value: 'samp_fault'
                 - tag: 'scope'
                   value: 'recepcion'
                 - tag: 'rootcause'
@@ -1007,6 +1306,8 @@ zabbix_export:
               priority: 'AVERAGE'
               description: 'Menos vapor: la molienda se reduce.'
               tags:
+                - tag: 'problem'
+                  value: 'boiler_B1'
                 - tag: 'scope'
                   value: 'energia'
                 - tag: 'rootcause'
@@ -1038,6 +1339,8 @@ zabbix_export:
               priority: 'AVERAGE'
               description: 'Menos vapor: la molienda se reduce.'
               tags:
+                - tag: 'problem'
+                  value: 'boiler_B2'
                 - tag: 'scope'
                   value: 'energia'
                 - tag: 'rootcause'
@@ -1069,6 +1372,8 @@ zabbix_export:
               priority: 'DISASTER'
               description: 'El LEL supera 25 % y el interlock detiene el extractor.'
               tags:
+                - tag: 'problem'
+                  value: 'hexane_leak'
                 - tag: 'scope'
                   value: 'extraccion'
                 - tag: 'rootcause'
@@ -1100,6 +1405,8 @@ zabbix_export:
               priority: 'HIGH'
               description: 'Tolva 1 fuera de servicio (silos 1–4).'
               tags:
+                - tag: 'problem'
+                  value: 'noria_N1'
                 - tag: 'scope'
                   value: 'recepcion'
                 - tag: 'rootcause'
@@ -1131,6 +1438,8 @@ zabbix_export:
               priority: 'HIGH'
               description: 'Tolva 2 fuera de servicio (silos 5–7 y galpones).'
               tags:
+                - tag: 'problem'
+                  value: 'noria_N2'
                 - tag: 'scope'
                   value: 'recepcion'
                 - tag: 'rootcause'
@@ -1162,6 +1471,8 @@ zabbix_export:
               priority: 'HIGH'
               description: 'La termometría sube hasta ~38 °C.'
               tags:
+                - tag: 'problem'
+                  value: 'silo_hot_S2'
                 - tag: 'scope'
                   value: 'acopio'
                 - tag: 'rootcause'
@@ -1193,6 +1504,8 @@ zabbix_export:
               priority: 'HIGH'
               description: 'Se dispara el CCM: la molienda se detiene.'
               tags:
+                - tag: 'problem'
+                  value: 'prep_power'
                 - tag: 'scope'
                   value: 'produccion'
                 - tag: 'rootcause'
@@ -1224,6 +1537,8 @@ zabbix_export:
               priority: 'AVERAGE'
               description: 'La cisterna queda detenida en el punto de carga.'
               tags:
+                - tag: 'problem'
+                  value: 'ol_arm'
                 - tag: 'scope'
                   value: 'despacho'
                 - tag: 'rootcause'
@@ -1255,8 +1570,76 @@ zabbix_export:
               priority: 'HIGH'
               description: 'Se dejan de enviar los datos de extracción a Zabbix (nodata).'
               tags:
+                - tag: 'problem'
+                  value: 'plc_ext_comm'
                 - tag: 'scope'
                   value: 'extraccion'
+                - tag: 'rootcause'
+                  value: 'yes'
+        - uuid: 'd5b7be7a574440ca99bf686b67a223f0'
+          name: 'Falla: Falla de frenos en camión'
+          type: 'DEPENDENT'
+          key: 'planta.problem[brake_fail]'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.problem_states.brake_fail'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          valuemap:
+            name: 'Origen de falla'
+          description: 'Un camión en marcha pierde los frenos: no se detiene detrás de otros y puede chocar.'
+          tags:
+            - tag: 'component'
+              value: 'fallas'
+            - tag: 'scope'
+              value: 'VIA'
+          triggers:
+            - uuid: 'accde3c9905b4f4780763a48409b7cfb'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.problem[brake_fail])>0'
+              name: 'Falla de frenos en camión ({ITEM.LASTVALUE})'
+              priority: 'HIGH'
+              description: 'Un camión en marcha pierde los frenos: no se detiene detrás de otros y puede chocar.'
+              tags:
+                - tag: 'problem'
+                  value: 'brake_fail'
+                - tag: 'scope'
+                  value: 'transito'
+                - tag: 'rootcause'
+                  value: 'yes'
+        - uuid: '35e5af7a78a84415ac85818fe3c44b60'
+          name: 'Falla: Colisión en vía interna'
+          type: 'DEPENDENT'
+          key: 'planta.problem[vehicle_collision]'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.problem_states.vehicle_collision'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          valuemap:
+            name: 'Origen de falla'
+          description: 'Choque entre camiones: la vía queda bloqueada hasta que mantenimiento y la grúa la despejen.'
+          tags:
+            - tag: 'component'
+              value: 'fallas'
+            - tag: 'scope'
+              value: 'VIA'
+          triggers:
+            - uuid: 'a2064e5738e5406083dcf2e14d640d02'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.problem[vehicle_collision])>0'
+              name: 'Colisión en vía interna ({ITEM.LASTVALUE})'
+              priority: 'HIGH'
+              description: 'Choque entre camiones: la vía queda bloqueada hasta que mantenimiento y la grúa la despejen.'
+              tags:
+                - tag: 'problem'
+                  value: 'vehicle_collision'
+                - tag: 'scope'
+                  value: 'transito'
                 - tag: 'rootcause'
                   value: 'yes'
       discovery_rules:
@@ -1710,6 +2093,12 @@ zabbix_export:
         - macro: '{$PLANTA.NODATA}'
           value: '2m'
           description: 'Tiempo sin datos antes de alertar.'
+        - macro: '{$PLANTA.TRAFFIC.STOPPED.MAX}'
+          value: '3'
+          description: 'Vehículos detenidos en vías internas antes de alertar.'
+        - macro: '{$PLANTA.WO.UNASSIGNED.MAX}'
+          value: '15'
+          description: 'Minutos de una OT sin técnico antes de alertar.'
       valuemaps:
         - uuid: '3e49e42e73c9478aaaca2642eed7842e'
           name: 'Estado de equipo'

@@ -436,12 +436,45 @@ export function truck(kind, seed = 0) {
     const t = cyl(g, 1.25, 1.25, 7.6, M.stainless, -1.2, 2.45, 0, 20);
     t.rotation.z = Math.PI / 2;
     box(g, 6, 0.15, 0.6, M.grating, -1.2, 3.75, 0, { cast: false });
+  } else if (kind === 'tow') {
+    // Tow / service truck: yellow body with boom and a beacon bar on the cab.
+    const yellow = new THREE.MeshStandardMaterial({ color: 0xf2b416, roughness: 0.5 });
+    box(g, 6.5, 1.2, 2.5, yellow, -1.2, 1.5, 0);
+    const boom = box(g, 5.5, 0.35, 0.35, M.steel, -2.2, 3.2, 0);
+    boom.rotation.z = 0.35;
+    box(g, 0.25, 1.4, 0.25, M.steel, -4.6, 2.2, 0, { cast: false });
   } else {
     box(g, 7.6, 2.4, 2.5, M.tarp, -1.2, 2.5, 0);
     box(g, 7.7, 0.3, 2.6, M.steel, -1.2, 1.25, 0, { cast: false });
   }
   wheels(g, [4.6, 3.1, -3.4, -4.6]);
+  // Brake lights (rear) and hazard/beacon lamps: their materials are animated by plant.js.
+  const brake = new THREE.MeshStandardMaterial({ color: 0x5a1010, emissive: 0xff2a1a, emissiveIntensity: 0 });
+  const amber = new THREE.MeshStandardMaterial({ color: 0x6b4a10, emissive: 0xffa31a, emissiveIntensity: 0 });
+  for (const z of [-1.05, 1.05]) {
+    box(g, 0.08, 0.3, 0.45, brake, -5.12, 1.25, z, { cast: false });
+    box(g, 0.1, 0.25, 0.25, amber, -5.12, 1.65, z, { cast: false });
+    box(g, 0.1, 0.25, 0.25, amber, 5.62, 1.0, z, { cast: false });
+  }
+  if (kind === 'tow') box(g, 0.5, 0.3, 2.2, amber, 4.3, 3.45, 0, { cast: false });
   g.userData.load = load;
+  g.userData.brakeMat = brake;
+  g.userData.amberMat = amber;
+  return g;
+}
+
+// Small electric service cart under a technician who is driving to a job.
+export function cart() {
+  const g = new THREE.Group();
+  const green = new THREE.MeshStandardMaterial({ color: 0x18a35e, roughness: 0.5 });
+  box(g, 2.6, 0.5, 1.5, green, 0, 0.55, 0);
+  box(g, 0.1, 1.2, 1.4, M.steel, -0.9, 1.3, 0, { cast: false });
+  box(g, 1.6, 0.08, 1.5, M.roofWhite, -0.2, 1.9, 0, { cast: false });
+  for (const [x, z] of [[0.9, 0.7], [0.9, -0.7], [-0.9, 0.7], [-0.9, -0.7]]) {
+    const w = mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.2, 10), M.tire, x, 0.3, z, { receive: false });
+    w.rotation.x = Math.PI / 2;
+    g.add(w);
+  }
   return g;
 }
 
@@ -461,7 +494,16 @@ export function person(helmet = 0xffd400, vest = 0xff7a00) {
   g.add(hat);
   g.scale.setScalar(1.25);
   g.userData.legs = legs;
+  g.userData.hat = hat;
+  g.userData.vest = vestM;
   return g;
+}
+
+// Warning triangle placed behind a crashed truck.
+export function warningTriangle() {
+  const m = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.1, 3), new THREE.MeshStandardMaterial({ color: 0xe5301a, emissive: 0xe5301a, emissiveIntensity: 0.4 }));
+  m.position.y = 0.55;
+  return m;
 }
 
 export function car(color) {

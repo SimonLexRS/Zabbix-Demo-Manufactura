@@ -32,6 +32,7 @@ import { DEFAULT_RULES, CEP_METRICS } from '../js/sim/cep.js';
 import { PROBLEMS } from '../js/sim/problems.js';
 import { sendValues } from './zabbix-sender.js';
 import { makeRpc, provision, setCorrelation, getCorrelation } from './zabbix-provision.js';
+import { ZabbixAck } from './zabbix-ack.js';
 import { ConfigStore } from './config.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -53,7 +54,7 @@ const MIME = {
 
 const store = new ConfigStore({ dataDir: process.env.DATA_DIR || path.join(ROOT, 'data') });
 const cfg = () => store.config;
-const sim = new Simulation({ randomFaults: cfg().sim.randomFaults });
+const sim = new Simulation({ randomFaults: cfg().sim.randomFaults, realism: cfg().realism });
 const clients = new Set();
 
 function applyToSim() {
@@ -63,6 +64,7 @@ function applyToSim() {
   sim.iot.configure(c.iot);
   sim.cep.enabled = c.cep.enabled;
   sim.cep.setRules(c.cep.rules ?? DEFAULT_RULES);
+  sim.configureRealism(c.realism);
 }
 applyToSim();
 
@@ -174,6 +176,14 @@ async function zabbixProvision() {
 }
 zabbixProvision();
 
+// Staff actions (work orders, complaints, escalations) → acknowledge on the Zabbix problem.
+const ack = new ZabbixAck({ rpc: () => rpc(), hostId: () => (zbx.provision.state === 'ok' ? zbx.provision.hostid : null) });
+setInterval(() => {
+  const items = sim.outbox.splice(0);
+  if (cfg().realism.ackEvents && cfg().zabbix.apiToken) ack.push(items);
+  ack.flush().catch(() => {});
+}, 8000);
+
 // Connectivity test: trapper port (empty sender request) + API version + token.
 async function zabbixTest() {
   const z = cfg().zabbix;
@@ -222,6 +232,7 @@ const zabbixSummary = () => ({
   iot: zbx.iot.last,
   provision: zbx.provision.state,
   correlation: zbx.correlation.state,
+  ack: ack.status(),
 });
 const withZabbix = (snap) => ({ ...snap, zabbix: zabbixSummary() });
 let lastSnapshot = withZabbix(sim.snapshot());
@@ -315,7 +326,7 @@ function configResponse() {
       problems: PROBLEMS.map(({ id, name }) => ({ id, name })),
       metrics: CEP_METRICS,
     },
-    status: zbx,
+    status: { ...zbx, ack: ack.status() },
   };
 }
 

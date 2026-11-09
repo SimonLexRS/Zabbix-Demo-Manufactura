@@ -25,11 +25,12 @@ export const ROADS = [
 
 // Truck stops. `cap` = trucks that can use it simultaneously.
 export const STATIONS = {
-  GATE: { id: 'GATE', name: 'Portería / Control de acceso', x: 62, z: 71, cap: 4 },
+  GATE: { id: 'GATE', name: 'Portería / Control de acceso', x: 62, z: 71, cap: 1 },
   SAMP: { id: 'SAMP', name: 'Calador automático (muestreo)', x: 38, z: 49, cap: 1 },
   BAL_IN: { id: 'BAL_IN', name: 'Balanza de ingreso (bruto)', x: 24, z: 49, cap: 1 },
   BAL_OUT: { id: 'BAL_OUT', name: 'Balanza de salida (tara)', x: 38, z: 93, cap: 1 },
   BAL_D: { id: 'BAL_D', name: 'Balanza de despacho (tara)', x: 26, z: 3, cap: 1 },
+  BAL_DS: { id: 'BAL_DS', name: 'Balanza de despacho (bruto)', x: 56, z: 30, cap: 1 },
   H1: { id: 'H1', name: 'Volcadora / Tolva 1 (silos)', x: -40, z: 93, cap: 1 },
   H2: { id: 'H2', name: 'Volcadora / Tolva 2 (galpones)', x: -44, z: 49, cap: 1 },
   OL: { id: 'OL', name: 'Carga de aceite (cisternas)', x: 46, z: 3, cap: 1 },
@@ -41,12 +42,14 @@ export const SPAWN = {
   north: { x: 74, z: -182 },
 };
 
-// Yard parking slots (trucks wait here for the calador).
+// Yard parking slots (trucks wait here for the calador). The back row is staggered so
+// its trucks drive in and out straight through the gaps of the front row.
 export const YARD_SLOTS = (() => {
   const s = [];
-  for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) s.push({ x: 25 + c * 7.5, z: 62 + r * 16 });
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) s.push({ x: 25 + c * 7.5 - (r ? 3.75 : 0), z: 62 + r * 16 });
   return s;
 })();
+export const YARD_AISLE_Z = 49; // C3 road, north of the yard: entry and exit point of every bay
 
 // Grain storage receiving soy from the hoppers.
 export const STORAGES = [
