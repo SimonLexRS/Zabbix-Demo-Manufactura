@@ -1073,7 +1073,8 @@ export class Simulation {
         silos: this.storages.map((s) => ({ '{#ID}': s.id, '{#NAME}': s.name, '{#TYPE}': s.kind })),
         tanks: this.tanks.map((t) => ({ '{#ID}': t.id, '{#NAME}': t.name })),
         boilers: this.boilers.map((b) => ({ '{#ID}': b.id, '{#NAME}': b.name })),
-        stations: Object.values(this.stations).map((s) => ({ '{#ID}': s.id, '{#NAME}': s.name })),
+        // {#AREA} feeds the `area` tag of the "camión detenido" trigger (Zabbix CEP groups by area).
+        stations: Object.values(this.stations).map((s) => ({ '{#ID}': s.id, '{#NAME}': s.name, '{#AREA}': ['BAL_D', 'BAL_DS', 'OL', 'ML'].includes(s.id) ? 'despacho' : 'recepcion' })),
       },
       problems: [...this.problems.values()].map((pr) => ({ key: pr.key, severity: pr.sev, name: pr.name })),
     };
@@ -1119,7 +1120,8 @@ export class Simulation {
     const out = this.flatMetrics()
       .filter((i) => !(plcDown && i.field && PLC_EXT_FIELDS.includes(i.field)))
       .map(({ key, value }) => ({ key, value }));
-    if (this.cep) out.push(...this.cep.senderItems((t) => this.clock(t).label));
+    // The app's own CEP engine only feeds the app UI: event correlation in Zabbix is done by
+    // the native CEP rules (server/zabbix-cep.js) on the real events.
     return out;
   }
 
@@ -1127,7 +1129,6 @@ export class Simulation {
   discoveryData() {
     const d = this.metrics().discovery;
     const out = Object.entries(d).map(([k, v]) => ({ key: `planta.${k}.discovery`, value: JSON.stringify(v) }));
-    if (this.cep) out.push({ key: 'planta.cep.discovery', value: JSON.stringify(this.cep.discovery()) });
     return out;
   }
 

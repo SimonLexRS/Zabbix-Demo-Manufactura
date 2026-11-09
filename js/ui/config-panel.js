@@ -132,7 +132,7 @@ export class ConfigPanel {
     const lld = s.lastDiscovery ? `${s.lastDiscovery.processed} ok / ${s.lastDiscovery.failed} fallidos · ${ago(s.lastDiscovery.at)}` : '—';
     const p = s.provision || {};
     const prov = p.state === 'ok' ? `ok · Zabbix ${p.version} · ${p.action}${p.iot ? ` · IoT +${p.iot.created} / ~${p.iot.updated} / off ${p.iot.disabled}` : ''}` : `${p.state}${p.detail ? ` · ${p.detail}` : ''}`;
-    return `<span>Planta</span><span>${esc(send)}</span><span>IoT</span><span>${esc(iotTxt)}</span><span>LLD</span><span>${esc(lld)}</span><span>Alta</span><span>${esc(prov)}</span><span>Correlación</span><span>${esc(s.correlation?.state ?? '—')}${s.correlation?.detail ? ` · ${esc(s.correlation.detail)}` : ''}</span>`;
+    return `<span>Planta</span><span>${esc(send)}</span><span>IoT</span><span>${esc(iotTxt)}</span><span>LLD</span><span>${esc(lld)}</span><span>Alta</span><span>${esc(prov)}</span><span>CEP Zabbix</span><span>${esc(s.cep?.state ?? '—')}${s.cep?.rules?.length ? ` · ${s.cep.rules.length} reglas` : ''}${s.cep?.detail ? ` · ${esc(s.cep.detail)}` : ''}</span>`;
   }
 
   zabbixForm() {
@@ -198,16 +198,21 @@ export class ConfigPanel {
     const c = this.data.cep;
     const rules = this.data.catalog.cepRules.rules;
     const last = this.data.catalog.cepRules.lastEvent;
-    const corr = this.data.status?.correlation || {};
     return `
-      <h3>Motor CEP de la app</h3>
-      <p class="note">Correlaciona fallas y métricas dentro de una ventana de tiempo y genera un evento compuesto. Se envía a Zabbix como <code>planta.cep.active[regla]</code> (0 = inactiva, 1–5 = severidad) con su trigger.</p>
-      <button class="cfg-switch" data-act="cep-enabled"><span>Evaluar reglas CEP</span>${sw(c.enabled)}</button>
+      <h3>CEP de Zabbix 8.0 (Event processing)</h3>
+      <p class="note">La correlación de eventos ocurre <b>dentro de Zabbix</b>: la app crea reglas CEP nativas (<i>Recolección de datos → Procesamiento de eventos</i>) que trabajan sobre los problemas reales con los tags <code>area</code>, <code>rol</code> (causa / síntoma) y <code>problema</code>. Agrupan cada falla con sus síntomas, convierten patrones en <b>incidentes</b>, descartan repeticiones y agregan el <code>responsable</code>. Requiere token Super admin.</p>
+      <button class="cfg-switch" data-act="zcep-toggle"><span>Reglas CEP en Zabbix</span>${sw(c.zabbixCep !== false)}</button>
+      <div id="zcep">${this.zabbixCepHtml()}</div>
+      <div class="row-actions"><button class="primary" data-act="zcep-apply">Aplicar reglas en Zabbix</button></div>
+
+      <h3>Motor local de la app (vista previa)</h3>
+      <p class="note">Evalúa reglas propias en la app para mostrarlas en pantalla, también sin servidor Zabbix. <b>No se envía a Zabbix</b>: allí la correlación la hacen las reglas CEP nativas de arriba.</p>
+      <button class="cfg-switch" data-act="cep-enabled"><span>Evaluar reglas locales</span>${sw(c.enabled)}</button>
       <p class="note">Último evento: <b>${last ? `${esc(last.time)} · ${esc(last.text)}` : '—'}</b></p>
       <div id="rules">${rules.map((r) => this.ruleHtml(r)).join('')}</div>
       <div class="row-actions"><button data-act="cep-reset">Restaurar reglas por defecto</button></div>
 
-      <h3>Nueva regla</h3>
+      <h3>Nueva regla local</h3>
       <div class="form" id="newrule">
         <label class="wide">Nombre<input name="name" placeholder="Ej.: Balanza y calador caídos" /></label>
         <label>Lógica<select name="logic"><option value="AND">Todas (Y) dentro de la ventana</option><option value="OR">Cualquiera (O)</option></select></label>
@@ -215,12 +220,25 @@ export class ConfigPanel {
         <label class="wide">Severidad<select name="sev">${SEV.map((s, i) => `<option value="${i}" ${i === 3 ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
       </div>
       <div id="conds" style="margin-top:8px">${this.condHtml()}${this.condHtml()}</div>
-      <div class="row-actions"><button data-act="cond-add">+ Condición</button><button class="primary" data-act="rule-create">Crear regla</button></div>
+      <div class="row-actions"><button data-act="cond-add">+ Condición</button><button class="primary" data-act="rule-create">Crear regla</button></div>`;
+  }
 
-      <h3>Correlación en Zabbix</h3>
-      <p class="note">El template ya trae <b>dependencias de triggers</b> (el síntoma se oculta mientras su causa está en problema) y tags <code>scope</code> + <code>rootcause</code>/<code>symptom</code>. La <b>correlación global</b> cierra síntomas antiguos cuando llega su causa raíz en la misma área (requiere token Super admin).</p>
-      <div class="kv"><span>Estado</span><span id="corrState">${esc(corr.state ?? '—')}${corr.detail ? ` · ${esc(corr.detail)}` : ''}</span></div>
-      <div class="row-actions"><button class="primary" data-act="corr-on">Activar en Zabbix</button><button data-act="corr-off">Quitar</button></div>`;
+  // Native CEP rules in Zabbix and what they did with the open problems.
+  zabbixCepHtml() {
+    const z = this.data.status?.cep || {};
+    const res = z.results;
+    const rules = (z.rules || [])
+      .map((r) => `<div class="kv"><span>${esc(r.kind)}</span><span><b>${esc(r.name)}</b>${r.enabled ? '' : ' · deshabilitada'}${r.error ? ` · <span class="err">${esc(r.error)}</span>` : ''}</span></div>`)
+      .join('');
+    const groups = (res?.groups || [])
+      .filter((g) => g.symptoms.length || g.incidente || g.repeticiones)
+      .slice(0, 6)
+      .map((g) => `<div class="kv"><span>${esc(g.area || '—')}</span><span><b>${esc(g.name)}</b>${g.symptoms.length ? ` · ${g.symptoms.length} síntoma(s)` : ''}${g.repeticiones ? ` · ${g.repeticiones} repeticiones` : ''}${g.responsable ? ` · ${esc(g.responsable)}` : ''}</span></div>`)
+      .join('');
+    return `
+      <div class="kv"><span>Estado</span><span>${esc(z.state ?? '—')}${z.detail ? ` · ${esc(z.detail)}` : ''}</span></div>
+      ${rules || '<p class="note">Sin reglas aplicadas todavía.</p>'}
+      ${res ? `<p class="note">En Zabbix ahora: <b>${res.open}</b> problemas abiertos · <b>${res.symptoms}</b> agrupados como síntomas · <b>${res.incidents}</b> incidentes CEP.</p>${groups}` : ''}`;
   }
 
   ruleHtml(r) {
@@ -330,12 +348,15 @@ export class ConfigPanel {
         return b.closest('.cond').remove();
       case 'rule-create':
         return this.createRule();
-      case 'corr-on':
-      case 'corr-off': {
-        const r = await this.api('POST', 'api/zabbix/correlation', { enable: act === 'corr-on' });
+      case 'zcep-toggle':
+      case 'zcep-apply': {
+        const enable = act === 'zcep-apply' ? true : this.data.cep.zabbixCep === false;
+        const r = await this.api('POST', 'api/zabbix/cep', { enable });
         if (r.cancelled) return;
-        $('#corrState', this.body).textContent = `${r.state ?? 'error'}${r.detail ? ` · ${r.detail}` : ''}`;
-        return this.toast(r.state === 'error' ? `Correlación: ${r.detail}` : `Correlación en Zabbix: ${r.state}`);
+        this.data.cep.zabbixCep = enable;
+        this.data.status = { ...(this.data.status || {}), cep: { ...(this.data.status?.cep || {}), ...r } };
+        this.render();
+        return this.toast(r.state === 'error' || r.state === 'no disponible' ? `CEP Zabbix: ${r.detail}` : `CEP Zabbix: ${r.state}${r.rules ? ` · ${r.rules.length} reglas` : ''}${r.legacyRemoved ? ' · correlación antigua eliminada' : ''}`);
       }
       case 'look-pixel': {
         const a = this.appearance.get();
@@ -397,9 +418,11 @@ export class ConfigPanel {
     if (!this.isOpen || !this.data || performance.now() - this.lastLive < 1000) return;
     this.lastLive = performance.now();
     if (s.zabbix) {
-      this.data.status = { ...(this.data.status || {}), last: s.zabbix.last, iot: { ...(this.data.status?.iot || {}), last: s.zabbix.iot }, provision: { ...(this.data.status?.provision || {}), state: s.zabbix.provision }, correlation: { ...(this.data.status?.correlation || {}), state: s.zabbix.correlation } };
+      this.data.status = { ...(this.data.status || {}), last: s.zabbix.last, iot: { ...(this.data.status?.iot || {}), last: s.zabbix.iot }, provision: { ...(this.data.status?.provision || {}), state: s.zabbix.provision }, cep: { ...(this.data.status?.cep || {}), ...(s.zabbix.cep || {}) } };
       const zs = $('#zstatus', this.body);
       if (zs) zs.innerHTML = this.zabbixStatus();
+      const zc = $('#zcep', this.body);
+      if (zc) zc.innerHTML = this.zabbixCepHtml();
     }
     if (this.tab === 'iot' && s.iot) {
       for (const d of s.iot.devices) {

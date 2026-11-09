@@ -14,7 +14,7 @@
 //   POST /api/control              {"speed":5}
 //   GET  /api/config               runtime config (Zabbix, IoT, CEP) without secrets
 //   PUT  /api/config               partial update, applied live and persisted in DATA_DIR
-//   POST /api/zabbix/test | /api/zabbix/provision | /api/zabbix/send-now | /api/zabbix/correlation
+//   POST /api/zabbix/test | /api/zabbix/provision | /api/zabbix/send-now | /api/zabbix/cep
 //   POST /api/auth/check           validates the admin token
 //   GET  /api/zabbix/status        sender / provisioning status
 //   GET  /healthz
@@ -32,7 +32,8 @@ import { IOT_DEVICES } from '../js/sim/iot.js';
 import { DEFAULT_RULES, CEP_METRICS } from '../js/sim/cep.js';
 import { PROBLEMS } from '../js/sim/problems.js';
 import { sendValues } from './zabbix-sender.js';
-import { makeRpc, provision, setCorrelation, getCorrelation } from './zabbix-provision.js';
+import { makeRpc, provision } from './zabbix-provision.js';
+import { applyCep, cepStatus, cepResults } from './zabbix-cep.js';
 import { ZabbixAck } from './zabbix-ack.js';
 import { ConfigStore } from './config.js';
 import { encodeFrame, urgentSignature } from '../js/sim/frames.js';
@@ -78,7 +79,7 @@ const zbx = {
   lastDiscovery: null,
   iot: { sends: 0, last: null },
   provision: { state: 'pendiente' },
-  correlation: { state: 'desconocida' },
+  cep: { state: 'desconocida', rules: [], results: null },
 };
 let lastDiscoveryAt = 0;
 let discoveryFast = true; // resend LLD every 60 s until Zabbix accepts it
@@ -159,11 +160,7 @@ async function zabbixProvision() {
     const r = await provision(api, { ...cfg(), iotDevices: IOT_DEVICES.map((d) => ({ ...d, enabled: sim.iot.state[d.id].enabled })) }, TEMPLATES);
     zbx.provision = { state: 'ok', at: stamp(), ...r };
     console.log(`Zabbix ${r.version}: templates importados, ${r.action} (hostid ${r.hostid}); IoT ${JSON.stringify(r.iot)}`);
-    try {
-      zbx.correlation = cfg().cep.zabbixCorrelation ? await setCorrelation(api, true) : await getCorrelation(api);
-    } catch (e) {
-      zbx.correlation = { state: 'error', detail: e.message };
-    }
+    await zabbixCep();
     lastDiscoveryAt = 0;
     discoveryFast = true;
     setTimeout(() => {
@@ -178,6 +175,34 @@ async function zabbixProvision() {
   return zbx.provision;
 }
 zabbixProvision();
+
+// Event correlation in Zabbix 8.0: native CEP rules (Data collection → Event processing).
+async function zabbixCep() {
+  const z = cfg().zabbix;
+  try {
+    const r = await applyCep(rpc(), { groups: [z.hostGroup, cfg().iot.group], enable: cfg().cep.zabbixCep });
+    zbx.cep = { ...zbx.cep, ...r, detail: r.legacyRemoved ? 'se quitó la correlación global antigua' : undefined, at: stamp() };
+    console.log(`Zabbix CEP: ${r.state} · ${r.rules.length} reglas${r.legacyRemoved ? ' · correlación antigua eliminada' : ''}`);
+  } catch (e) {
+    const missing = /ceprule.*(not found|Incorrect API)/i.test(e.message);
+    zbx.cep = { ...zbx.cep, state: missing ? 'no disponible' : 'error', detail: missing ? 'este Zabbix no tiene CEP (requiere 8.0)' : e.message };
+  }
+  return zbx.cep;
+}
+
+// What Zabbix CEP did with the plant's problems (causes/symptoms, incidents), every 10 s;
+// rule status (enabled, processing errors) every minute.
+let cepTick = 0;
+setInterval(async () => {
+  if (zbx.provision.state !== 'ok' || !cfg().cep.zabbixCep || !['activa', 'con errores'].includes(zbx.cep.state)) return;
+  try {
+    const api = rpc();
+    zbx.cep.results = await cepResults(api, [zbx.provision.hostid]);
+    if (cepTick++ % 6 === 0) zbx.cep.rules = await cepStatus(api);
+  } catch (e) {
+    zbx.cep.results = { ...(zbx.cep.results || {}), error: e.message };
+  }
+}, 10_000);
 
 // Staff actions (work orders, complaints, escalations) → acknowledge on the Zabbix problem.
 const ack = new ZabbixAck({ rpc: () => rpc(), hostId: () => (zbx.provision.state === 'ok' ? zbx.provision.hostid : null) });
@@ -234,7 +259,7 @@ const zabbixSummary = () => ({
   last: zbx.last,
   iot: zbx.iot.last,
   provision: zbx.provision.state,
-  correlation: zbx.correlation.state,
+  cep: { state: zbx.cep.state, rules: zbx.cep.rules, results: zbx.cep.results },
   ack: ack.status(),
 });
 const withZabbix = (snap) => ({ ...snap, zabbix: zabbixSummary() });
@@ -429,12 +454,12 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok, speed: sim.speed });
       }
       if (p === '/api/config' && req.method === 'PUT') {
-        const before = JSON.stringify({ z: cfg().zabbix, iotOn: cfg().iot.enabled, prefix: cfg().iot.hostPrefix, group: cfg().iot.group, dev: Object.fromEntries(Object.entries(cfg().iot.devices).map(([k, v]) => [k, v.enabled])), corr: cfg().cep.zabbixCorrelation });
+        const before = JSON.stringify({ z: cfg().zabbix, iotOn: cfg().iot.enabled, prefix: cfg().iot.hostPrefix, group: cfg().iot.group, dev: Object.fromEntries(Object.entries(cfg().iot.devices).map(([k, v]) => [k, v.enabled])), cep: cfg().cep.zabbixCep });
         const prevRandom = cfg().sim.randomFaults;
         const errors = store.update(body);
         applyToSim();
         if (prevRandom !== cfg().sim.randomFaults) sim.setRandomFaults(cfg().sim.randomFaults);
-        const after = JSON.stringify({ z: cfg().zabbix, iotOn: cfg().iot.enabled, prefix: cfg().iot.hostPrefix, group: cfg().iot.group, dev: Object.fromEntries(Object.entries(cfg().iot.devices).map(([k, v]) => [k, v.enabled])), corr: cfg().cep.zabbixCorrelation });
+        const after = JSON.stringify({ z: cfg().zabbix, iotOn: cfg().iot.enabled, prefix: cfg().iot.hostPrefix, group: cfg().iot.group, dev: Object.fromEntries(Object.entries(cfg().iot.devices).map(([k, v]) => [k, v.enabled])), cep: cfg().cep.zabbixCep });
         if (before !== after) {
           // Zabbix-side objects depend on these settings: re-provision and resend LLD.
           lastDiscoveryAt = 0;
@@ -451,15 +476,9 @@ const server = http.createServer(async (req, res) => {
         await iotSend(true);
         return json(res, 200, { last: zbx.last, iot: zbx.iot.last });
       }
-      if (p === '/api/zabbix/correlation') {
-        try {
-          const enable = body.enable !== false;
-          store.update({ cep: { zabbixCorrelation: enable } });
-          zbx.correlation = await setCorrelation(rpc(), enable);
-        } catch (e) {
-          zbx.correlation = { state: 'error', detail: e.message };
-        }
-        return json(res, 200, zbx.correlation);
+      if (p === '/api/zabbix/cep' || p === '/api/zabbix/correlation') {
+        store.update({ cep: { zabbixCep: body.enable !== false } });
+        return json(res, 200, await zabbixCep());
       }
       return json(res, 404, { error: 'not found' });
     }

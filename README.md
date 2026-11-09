@@ -82,10 +82,35 @@ Botón **Configuración** en la barra inferior. Los cambios se aplican en calien
 
 - **Zabbix**: activar el envío, servidor/puerto trapper, host, grupo, intervalos de envío y de LLD, URL y token de la API (el token nunca se devuelve al navegador), `{$TRAPPER.ALLOWED_HOSTS}`. Botones **Probar conexión** (trapper + API + token), **Re-provisionar** y **Enviar ahora**, con el estado de cada envío.
 - **IoT**: 15 dispositivos simulados (termometría de silos S1–S7, radares de nivel TA1–TA3, caudalímetro de aceite, medidores de energía de preparación y sala de fuerza, detector de gas LEL/O₂, estación meteorológica). Cada uno es un **host propio** en Zabbix (`iot-<id>`, grupo `Manufactura/IoT`) con el template **Planta Aceitera IoT device by Zabbix sender**: conexión, batería, RSSI, uptime y sus lecturas por LLD (`iot.metric[...]`). Por dispositivo: habilitar, intervalo, ruido, **Sin conexión** (dispara `nodata`) y **Batería baja**. Con fallas aleatorias activas también hay cortes de radio aleatorios.
-- **CEP** (correlación de eventos):
-  - **Motor en la app**: reglas "A y B dentro de N minutos" (o "A o B") sobre fallas y métricas. Incluye 5 reglas (red de balanza → camión detenido, pérdida de vapor → molienda, riesgo de seguridad en extracción, cuello de botella en recepción, calidad de grano) y un editor para crear, ajustar ventana/severidad, desactivar o borrar reglas. Cada regla llega a Zabbix como `planta.cep.active[<regla>]` (0 inactiva, 1–5 severidad) con su trigger, más `planta.cep.last_event`.
-  - **En Zabbix**: el template sender trae **dependencias de triggers** (p. ej. "camión detenido" depende de "caída de red en balanza"; "molienda < 70 %" de "presión de vapor baja", que depende de los disparos de caldera) y tags `scope` + `rootcause`/`symptom`. Desde el panel se crea la **correlación global** *"Planta Aceitera: la causa raíz cierra los síntomas"* (requiere token Super admin).
+- **CEP** (correlación de eventos): ver la sección [CEP nativo de Zabbix 8.0](#cep-nativo-de-zabbix-80). En el panel se ven las reglas en Zabbix (estado y errores), lo que correlacionaron y el botón **Aplicar reglas en Zabbix**. El motor local de la app queda como vista previa en pantalla (también sin servidor) y no envía nada a Zabbix.
 - **Apariencia**: render en alta calidad por defecto; modo retro pixelado opcional (se guarda por navegador).
+
+## CEP nativo de Zabbix 8.0
+
+La correlación de eventos ocurre **dentro de Zabbix**, con el motor *Complex Event Processing* de Zabbix 8.0 (*Recolección de datos → Procesamiento de eventos*, API `ceprule.*`). Al provisionar, la app crea o actualiza sus reglas (`server/zabbix-cep.js`). Solo toca las que empiezan con **"Planta Aceitera · "** y borra la correlación global antigua (`correlation.*`) de versiones anteriores. Requiere un token Super admin.
+
+**Tags de los triggers** (`tools/gen-zabbix-template.mjs`):
+- `area`: recepcion, despacho, acopio, extraccion, energia, produccion, transito, mantenimiento, iot.
+- `rol`: causa o sintoma.
+- `problema`: id de la falla o tipo de síntoma (`camion_detenido`, `cola_rn4`, `lel_alto`, `evacuacion`, `casi_accidente`, …).
+- `equipo`: estación o fuente.
+- `problem=<id>`: lo usa el acknowledge del personal.
+
+Los síntomas ya **no dependen** de su causa: antes las dependencias impedían que se generaran y Zabbix nunca podía mostrar la relación. Solo queda la escalera "LEL elevado → LEL > 25 %".
+
+| Regla | Ventana | Efecto |
+|---|---|---|
+| Enriquecer: responsable por área | sin ventana | tag `responsable` (Jefe de producción, HSE, Mantenimiento, TI) según el área |
+| Casi accidentes repetidos | causa/síntomas 15 min | se queda con el primero, **descarta** los repetidos y los cuenta en `repeticiones` |
+| Causa y síntomas por área | causa/síntomas 45 min, por `area` | la primera falla del área es la **causa**; lo que aparece después en esa área son sus **síntomas** (tag `sintomas`). Si la ventana la abre un síntoma, se cierra |
+| Incidente de seguridad en extracción | patrón 15 min | fuga de hexano con LEL > 25 % o evacuación → la fuga pasa a "INCIDENTE: …" con severidad Desastre |
+| Bloqueo vial interno | patrón 20 min | colisión con tránsito detenido o cola en RN4 → "INCIDENTE: bloqueo vial interno" con severidad Desastre |
+| Recepción paralizada | patrón 30 min | falla de recepción con 2 o más camiones detenidos o cola → `incidente=recepcion_paralizada`, severidad Alta |
+| Pérdida de vapor afecta la molienda | patrón 30 min | disparo de caldera con vapor bajo o molienda baja → "INCIDENTE: …" con severidad Alta |
+
+- **En la app**: el feed *Problemas* muestra "Correlación en Zabbix (CEP)", con causas, síntomas, incidentes y repeticiones leídos de Zabbix cada 10 s.
+- **En el dashboard**: la página "CEP de Zabbix" (`tools/create-zabbix-dashboard.mjs`) muestra incidentes, causas con síntomas y responsable.
+- **Para desactivarlo**: `ZABBIX_CEP=0` o el interruptor del panel.
 
 ## Realismo: tránsito, personal y órdenes de trabajo
 
@@ -140,6 +165,7 @@ Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 
 | `COLLISIONS` | `1` | `0` = sin colisiones (los conductores siempre frenan) |
 | `ROAD_INCIDENTS` | `8` | incidentes viales (falla de frenos / conductor distraído) por día simulado con fallas aleatorias activas; `0` = solo manuales |
 | `ZABBIX_ACK` | `1` | `0` = no registrar acciones del personal en Zabbix |
+| `ZABBIX_CEP` | `1` | `0` = no crear las reglas CEP nativas en Zabbix 8.0 |
 | `SIM_SPEED` | `1` | 1 min simulado por segundo |
 | `CONTROL_TOKEN` | — | Clave de administrador: si se define, los POST/PUT (fallas, configuración) exigen `x-control-token` |
 | `DATA_DIR` | `/app/data` | Dónde se guarda la configuración del panel |

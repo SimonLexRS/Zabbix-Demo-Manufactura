@@ -1,11 +1,10 @@
 // Zabbix API helpers (token auth): import templates, create/update the plant host
-// and the IoT device hosts, and manage the CEP global event correlation.
+// and the IoT device hosts. Event correlation (Zabbix 8.0 CEP) lives in zabbix-cep.js.
 // Everything is idempotent: safe to run on every start or from the config panel.
 import { readFileSync } from 'node:fs';
 
 export const SENDER_TEMPLATE = 'Planta Aceitera Demo by Zabbix sender';
 export const IOT_TEMPLATE = 'Planta Aceitera IoT device by Zabbix sender';
-export const CORRELATION_NAME = 'Planta Aceitera: la causa raíz cierra los síntomas';
 const TRAPPER_MACRO = '{$TRAPPER.ALLOWED_HOSTS}';
 
 export function makeRpc(url, token) {
@@ -26,7 +25,7 @@ const IMPORT_RULES = {
   items: { createMissing: true, updateExisting: true, deleteMissing: true },
   triggers: { createMissing: true, updateExisting: true, deleteMissing: true },
   discoveryRules: { createMissing: true, updateExisting: true, deleteMissing: true },
-  valueMaps: { createMissing: true, updateExisting: true },
+  valueMaps: { createMissing: true, updateExisting: true, deleteMissing: true },
 };
 
 async function ensureGroup(rpc, name) {
@@ -86,39 +85,4 @@ export async function provision(rpc, cfg, { templateFile, iotTemplateFile }) {
     else iot.updated++;
   }
   return { version, hostid: plant.hostid, action: `host ${plant.action}`, iot };
-}
-
-// Global event correlation: a new root-cause event (tag rootcause) closes older
-// symptom events (tag symptom=yes) of the same scope. Requires a Super admin token.
-export async function setCorrelation(rpc, enable) {
-  const [cur] = await rpc('correlation.get', { filter: { name: [CORRELATION_NAME] }, output: ['correlationid', 'status'] });
-  if (!enable) {
-    if (cur) await rpc('correlation.delete', [cur.correlationid]);
-    return { state: 'deshabilitada', id: null };
-  }
-  const def = {
-    name: CORRELATION_NAME,
-    description: 'Creada por la app Planta Aceitera (CEP). Cierra síntomas cuando aparece su causa raíz en la misma área.',
-    status: 0,
-    filter: {
-      evaltype: 0,
-      conditions: [
-        { type: 1, tag: 'rootcause' },
-        { type: 4, tag: 'symptom', operator: 0, value: 'yes' },
-        { type: 3, oldtag: 'scope', newtag: 'scope' },
-      ],
-    },
-    operations: [{ type: 0 }],
-  };
-  if (cur) {
-    await rpc('correlation.update', { correlationid: cur.correlationid, ...def });
-    return { state: 'activa', id: cur.correlationid };
-  }
-  const id = (await rpc('correlation.create', def)).correlationids[0];
-  return { state: 'activa', id };
-}
-
-export async function getCorrelation(rpc) {
-  const [cur] = await rpc('correlation.get', { filter: { name: [CORRELATION_NAME] }, output: ['correlationid', 'status'] });
-  return cur ? { state: cur.status === '0' ? 'activa' : 'deshabilitada', id: cur.correlationid } : { state: 'no creada', id: null };
 }

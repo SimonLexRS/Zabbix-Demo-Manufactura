@@ -32,7 +32,8 @@ export function defaultsFromEnv(env = process.env) {
       trapperAllowedHosts: env.ZABBIX_TRAPPER_ALLOWED_HOSTS || '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1',
     },
     iot: { enabled: !off(env.IOT_ENABLED ?? '1'), hostPrefix: env.IOT_HOST_PREFIX || 'iot-', group: env.IOT_HOST_GROUP || 'Manufactura/IoT', randomDropouts: true, devices: {} },
-    cep: { enabled: true, rules: null, zabbixCorrelation: false },
+    // zabbixCep: event correlation inside Zabbix 8.0 with native CEP rules (server/zabbix-cep.js).
+    cep: { enabled: true, rules: null, zabbixCep: !off(env.ZABBIX_CEP ?? '1') },
     sim: { randomFaults: !off(env.RANDOM_FAULTS), speed: num(env.SIM_SPEED, 0, 30, 1) },
     realism: {
       collisions: !off(env.COLLISIONS ?? '1'),
@@ -84,7 +85,8 @@ export function applyPatch(cfg, patch = {}) {
 
   const e = patch.cep || {};
   if (e.enabled !== undefined) c.cep.enabled = !!e.enabled;
-  if (e.zabbixCorrelation !== undefined) c.cep.zabbixCorrelation = !!e.zabbixCorrelation;
+  if (e.zabbixCep !== undefined) c.cep.zabbixCep = !!e.zabbixCep;
+  delete c.cep.zabbixCorrelation; // legacy global correlation (replaced by Zabbix CEP)
   if (e.rules !== undefined) {
     if (e.rules === null) c.cep.rules = null;
     else {

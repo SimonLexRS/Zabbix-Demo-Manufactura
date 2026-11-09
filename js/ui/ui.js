@@ -330,7 +330,7 @@ export class UI {
     const sig =
       this.feedTab +
       (this.feedTab === 'problems'
-        ? s.problems.map((p) => p.key + p.durMin).join()
+        ? s.problems.map((p) => p.key + p.durMin).join() + (s.zabbix?.cep?.results?.at ?? '')
         : this.feedTab === 'orders'
           ? orders.map((o) => `${o.id}${o.status}${o.ageMin}${o.etaMin}${o.repairLeftMin}`).join()
           : s.events[0]?.id);
@@ -356,20 +356,33 @@ export class UI {
         })
         .join('');
     } else if (this.feedTab === 'problems') {
+      // How Zabbix CEP correlated the open problems: causes with their symptoms and incidents.
+      const cep = (s.zabbix?.cep?.results?.groups || []).filter((g) => g.symptoms.length || g.incidente || g.repeticiones);
+      const cepHtml = cep.length
+        ? `<div class="feed-sub">Correlación en Zabbix (CEP)</div>${cep
+            .map((g) => {
+              const sev = SEV_CLASS[Math.max(0, Math.min(4, g.severity - 1))];
+              const parts = [g.symptoms.length ? `${g.symptoms.length} síntoma(s): ${g.symptoms.map((x) => x.name).slice(0, 3).join(' · ')}` : '', g.repeticiones ? `${g.repeticiones} repeticiones descartadas` : '', g.responsable];
+              return `<div class="ev cep sev-${sev}" data-src="${esc(g.problema)}"><i></i><div><b>${g.incidente ? '⚡ ' : ''}${esc(g.name)}</b><small>${esc(parts.filter(Boolean).join(' · '))}</small></div></div>`;
+            })
+            .join('')}<div class="feed-sub">Fallas en la planta</div>`
+        : '';
       if (!s.problems.length) {
-        list.innerHTML = '<div class="empty">Sin problemas activos. Usa <b>Fallas</b> para activar fallas y probar los triggers de Zabbix.</div>';
+        list.innerHTML = `${cepHtml}<div class="empty">Sin problemas activos. Usa <b>Fallas</b> para activar fallas y probar los triggers de Zabbix.</div>`;
         return;
       }
-      list.innerHTML = [...s.problems]
-        .sort((a, b) => b.sev - a.sev)
-        .map((p) => `<div class="ev sev-${SEV_CLASS[p.sev]}" data-src="${esc(p.src)}"><i></i><div><b>${esc(p.name)}</b><small>${SEV[p.sev]} · desde ${esc(p.since)} · ${p.durMin} min</small></div></div>`)
-        .join('');
+      list.innerHTML =
+        cepHtml +
+        [...s.problems]
+          .sort((a, b) => b.sev - a.sev)
+          .map((p) => `<div class="ev sev-${SEV_CLASS[p.sev]}" data-src="${esc(p.src)}"><i></i><div><b>${esc(p.name)}</b><small>${SEV[p.sev]} · desde ${esc(p.since)} · ${p.durMin} min</small></div></div>`)
+          .join('');
     } else {
       list.innerHTML = s.events
         .map((e) => `<div class="ev sev-${SEV_CLASS[e.sev]} k-${e.kind}" data-src="${esc(e.src)}"><i></i><div><b>${esc(e.msg)}</b><small>${esc(e.time)}</small></div></div>`)
         .join('');
     }
-    for (const row of list.querySelectorAll('.ev')) row.onclick = () => this.h.onSource(row.dataset.src);
+    for (const row of list.querySelectorAll('.ev')) if (row.dataset.src) row.onclick = () => this.h.onSource(row.dataset.src);
   }
 
   // ───────────── details panel ─────────────

@@ -167,7 +167,7 @@ function build(mode) {
     const key = `planta.problem[${p.id}]`;
     items.push({
       uuid: uuid(`problem:${p.id}`), name: `Falla: ${p.name}`, ...src(key, `$.problem_states.${p.id}`), value_type: 'UNSIGNED', valuemap: { name: 'Origen de falla' },
-      description: p.desc, tags: [{ tag: 'component', value: 'fallas' }, { tag: 'scope', value: p.src }],
+      description: p.desc, tags: [{ tag: 'component', value: 'fallas' }, { tag: 'equipo', value: p.src }],
       // Tag "problem" lets the app find this event to acknowledge it with staff actions.
       triggers: [{ _id: `problem:${p.id}`, uuid: uuid(`t:problem:${p.id}`), expression: `last(${ref(key)})>0`, name: `${p.name} ({ITEM.LASTVALUE})`, priority: PRIORITY[p.sev], description: p.desc, tags: [{ tag: 'problem', value: p.id }] }],
     });
@@ -217,56 +217,32 @@ function build(mode) {
       ['available', 'Disponible', '', 'UNSIGNED', null, { valuemap: { name: 'Estado de equipo' } }],
       ['network', 'Red / comunicación', '', 'UNSIGNED', null, { valuemap: { name: 'Estado de red' } }],
       ['busy', 'Camiones en uso', '', 'UNSIGNED'],
-      ['trucks_stopped', 'Camiones detenidos', '', 'UNSIGNED', [{ expression: 'last(KEY)>0', _id: 'trucks_stopped', name: '{#NAME}: camión detenido', priority: 'AVERAGE' }]],
+      ['trucks_stopped', 'Camiones detenidos', '', 'UNSIGNED', [{ expression: 'last(KEY)>0', _id: 'trucks_stopped', name: '{#NAME}: camión detenido', priority: 'AVERAGE', tags: [{ tag: 'equipo', value: '{#ID}' }] }]],
       ['operations_today', 'Operaciones hoy', '', 'UNSIGNED'],
     ]),
   ];
 
-  // CEP (sender only): composite events from the app's correlation engine.
-  if (sender) {
-    const cepKey = 'planta.cep.active[{#RULE}]';
-    discovery.push({
-      uuid: uuid('lld:cep'), name: 'Reglas CEP (correlación de eventos)', type: 'TRAP', key: 'planta.cep.discovery',
-      item_prototypes: [{
-        uuid: uuid('proto:cep:active'), name: 'CEP: {#NAME}', type: 'TRAP', key: cepKey, value_type: 'UNSIGNED', valuemap: { name: 'Severidad CEP' },
-        description: '0 = inactiva; 1..5 = severidad del evento compuesto detectado por la regla.',
-        tags: [{ tag: 'component', value: 'cep' }, { tag: 'cep', value: '{#RULE}' }],
-        trigger_prototypes: PRIORITY.map((prio, i) => ({
-          uuid: uuid(`tp:cep:${prio}`), expression: `last(${ref(cepKey)})=${i + 1}`, name: 'CEP: {#NAME}', priority: prio,
-          description: 'Evento compuesto (CEP) generado por la app al correlacionar fallas y métricas dentro de una ventana de tiempo.',
-          tags: [{ tag: 'scope', value: 'cep' }, { tag: 'rootcause', value: 'cep' }],
-        })),
-      }],
-    });
-    items.push(
-      { uuid: uuid('cep:count'), name: 'CEP: reglas activas', type: 'TRAP', key: 'planta.cep.active_count', value_type: 'UNSIGNED', tags: tags('cep') },
-      { uuid: uuid('cep:last'), name: 'CEP: último evento compuesto', type: 'TRAP', key: 'planta.cep.last_event', value_type: 'TEXT', trends: '0', tags: tags('cep') },
-    );
-  }
-
-  // Event correlation inside Zabbix: tags (scope + rootcause/symptom) and trigger dependencies
-  // so a symptom is suppressed while its cause is in problem state.
-  const SCOPE = {
+  // Event tags for Zabbix 8.0 Complex Event Processing (rules in server/zabbix-cep.js):
+  //   area     plant area, the CEP groups causes and symptoms per area
+  //   rol      causa | sintoma
+  //   problema fault id (causes) or symptom type
+  // Causes and symptoms are NOT linked with trigger dependencies any more: dependencies
+  // stopped symptoms from ever being generated, so Zabbix could not show the relation.
+  // The CEP "cause and symptoms" window groups them instead.
+  const AREA = {
     steam_low: 'energia', crush_low: 'produccion', meal_hex: 'produccion', lel_disaster: 'extraccion', lel_warn: 'extraccion', extractor_stopped: 'extraccion',
-    plc_nodata: 'extraccion', hexane_low: 'extraccion', oil_full: 'despacho', road_queue: 'recepcion', trucks_stopped: 'recepcion', silo_temp: 'acopio',
+    plc_nodata: 'extraccion', hexane_low: 'extraccion', oil_full: 'despacho', road_queue: 'recepcion', trucks_stopped: '{#AREA}', silo_temp: 'acopio',
     near_miss: 'transito', traffic_stopped: 'transito', wo_unassigned: 'mantenimiento', evacuation: 'extraccion',
   };
-  const PROBLEM_SCOPE = { BAL_IN: 'recepcion', BAL_OUT: 'recepcion', GATE: 'recepcion', SAMP: 'recepcion', N1: 'recepcion', N2: 'recepcion', B1: 'energia', B2: 'energia', EXT: 'extraccion', S2: 'acopio', PREP: 'produccion', OL: 'despacho', VIA: 'transito' };
-  for (const p of PROBLEMS) SCOPE[`problem:${p.id}`] = PROBLEM_SCOPE[p.src] || 'planta';
-  const recepcionCauses = ['bal_in_net', 'bal_out_net', 'gate_net', 'samp_fault', 'noria_N1', 'noria_N2'].map((id) => `problem:${id}`);
-  const DEPS = {
-    trucks_stopped: [...recepcionCauses, 'problem:ol_arm'],
-    steam_low: ['problem:boiler_B1', 'problem:boiler_B2'],
-    crush_low: ['steam_low', 'problem:prep_power', 'problem:hexane_leak', 'extractor_stopped'],
-    meal_hex: ['steam_low'],
-    extractor_stopped: ['problem:hexane_leak', 'lel_disaster'],
-    lel_warn: ['lel_disaster'],
-    plc_nodata: ['problem:plc_ext_comm'],
-    silo_temp: ['problem:silo_hot_S2'],
-    traffic_stopped: ['problem:vehicle_collision'],
-    road_queue: [...recepcionCauses, 'problem:vehicle_collision'],
-    evacuation: [],
+  const SYMPTOM = {
+    steam_low: 'vapor_bajo', crush_low: 'molienda_baja', meal_hex: 'hexano_en_harina', lel_disaster: 'lel_alto', lel_warn: 'lel_elevado', extractor_stopped: 'extractor_detenido',
+    plc_nodata: 'plc_sin_datos', hexane_low: 'hexano_bajo', oil_full: 'tanques_llenos', road_queue: 'cola_rn4', trucks_stopped: 'camion_detenido', silo_temp: 'temp_grano',
+    near_miss: 'casi_accidente', traffic_stopped: 'transito_detenido', wo_unassigned: 'ot_sin_tecnico', evacuation: 'evacuacion',
   };
+  const PROBLEM_AREA = { BAL_IN: 'recepcion', BAL_OUT: 'recepcion', GATE: 'recepcion', SAMP: 'recepcion', N1: 'recepcion', N2: 'recepcion', B1: 'energia', B2: 'energia', EXT: 'extraccion', S2: 'acopio', PREP: 'produccion', OL: 'despacho', VIA: 'transito' };
+  for (const p of PROBLEMS) AREA[`problem:${p.id}`] = PROBLEM_AREA[p.src] || 'planta';
+  // Only a severity ladder of the same measurement stays as a dependency.
+  const DEPS = { lel_warn: ['lel_disaster'] };
   const allTriggers = [
     ...items.flatMap((i) => i.triggers || []),
     ...discovery.flatMap((d) => d.item_prototypes.flatMap((p) => p.trigger_prototypes || [])),
@@ -275,7 +251,12 @@ function build(mode) {
   for (const t of allTriggers) {
     if (!t._id) continue;
     const isCause = t._id.startsWith('problem:');
-    t.tags = [...(t.tags || []), { tag: 'scope', value: SCOPE[t._id] || 'planta' }, isCause ? { tag: 'rootcause', value: 'yes' } : { tag: 'symptom', value: 'yes' }];
+    t.tags = [
+      ...(t.tags || []),
+      { tag: 'area', value: AREA[t._id] || 'planta' },
+      { tag: 'rol', value: isCause ? 'causa' : 'sintoma' },
+      { tag: 'problema', value: isCause ? t._id.slice(8) : SYMPTOM[t._id] || t._id },
+    ];
     const deps = (DEPS[t._id] || []).map((id) => byId[id]).filter(Boolean);
     if (deps.length) t.dependencies = deps.map((d) => ({ name: d.name, expression: d.expression }));
   }
@@ -296,7 +277,6 @@ function build(mode) {
     { uuid: uuid('vm:red'), name: 'Estado de red', mappings: [{ value: '0', newvalue: 'Sin red' }, { value: '1', newvalue: 'En línea' }] },
     { uuid: uuid('vm:origen'), name: 'Origen de falla', mappings: [{ value: '0', newvalue: 'Normal' }, { value: '1', newvalue: 'Manual' }, { value: '2', newvalue: 'Aleatoria' }] },
     { uuid: uuid('vm:sino'), name: 'Planta: sí/no', mappings: [{ value: '0', newvalue: 'No' }, { value: '1', newvalue: 'Sí' }] },
-    ...(sender ? [{ uuid: uuid('vm:cep'), name: 'Severidad CEP', mappings: ['Inactiva', 'Información', 'Advertencia', 'Promedio', 'Alta', 'Desastre'].map((n, i) => ({ value: String(i), newvalue: n })) }] : []),
   ];
 
   const doc = {
@@ -347,18 +327,18 @@ function buildIot() {
     return h.join('');
   };
   const ref = (key) => `/${T}/${key}`;
-  const tg = (scope, kind) => [{ tag: 'scope', value: scope }, { tag: kind, value: 'yes' }];
-  const offline = { uuid: uuid('t:offline'), expression: `nodata(${ref('iot.online')},{$IOT.NODATA})=1`, name: '{HOST.NAME}: sin conexión', priority: 'AVERAGE', description: 'El dispositivo dejó de reportar (sin radio, sin energía o deshabilitado).', tags: tg('iot', 'rootcause') };
+  const tg = (problema, rol) => [{ tag: 'area', value: 'iot' }, { tag: 'rol', value: rol }, { tag: 'problema', value: problema }];
+  const offline = { uuid: uuid('t:offline'), expression: `nodata(${ref('iot.online')},{$IOT.NODATA})=1`, name: '{HOST.NAME}: sin conexión', priority: 'AVERAGE', description: 'El dispositivo dejó de reportar (sin radio, sin energía o deshabilitado).', tags: tg('iot_sin_conexion', 'causa') };
   const dep = [{ name: offline.name, expression: offline.expression }];
   const items = [
     { uuid: uuid('online'), name: 'Conectado', type: 'TRAP', key: 'iot.online', value_type: 'UNSIGNED', valuemap: { name: 'IoT conectado' }, tags: [{ tag: 'component', value: 'salud' }], triggers: [offline] },
     {
       uuid: uuid('battery'), name: 'Batería', type: 'TRAP', key: 'iot.battery_pct', value_type: 'FLOAT', units: '%', tags: [{ tag: 'component', value: 'salud' }],
-      triggers: [{ uuid: uuid('t:battery'), expression: `last(${ref('iot.battery_pct')})<{$IOT.BATTERY.MIN}`, name: '{HOST.NAME}: batería baja (< {$IOT.BATTERY.MIN}%)', priority: 'WARNING', dependencies: dep, tags: tg('iot', 'symptom') }],
+      triggers: [{ uuid: uuid('t:battery'), expression: `last(${ref('iot.battery_pct')})<{$IOT.BATTERY.MIN}`, name: '{HOST.NAME}: batería baja (< {$IOT.BATTERY.MIN}%)', priority: 'WARNING', dependencies: dep, tags: tg('iot_bateria_baja', 'sintoma') }],
     },
     {
       uuid: uuid('rssi'), name: 'Señal de radio (RSSI)', type: 'TRAP', key: 'iot.rssi_dbm', value_type: 'FLOAT', units: 'dBm', tags: [{ tag: 'component', value: 'salud' }],
-      triggers: [{ uuid: uuid('t:rssi'), expression: `max(${ref('iot.rssi_dbm')},5m)<{$IOT.RSSI.MIN}`, name: '{HOST.NAME}: señal débil (< {$IOT.RSSI.MIN} dBm)', priority: 'WARNING', dependencies: dep, tags: tg('iot', 'symptom') }],
+      triggers: [{ uuid: uuid('t:rssi'), expression: `max(${ref('iot.rssi_dbm')},5m)<{$IOT.RSSI.MIN}`, name: '{HOST.NAME}: señal débil (< {$IOT.RSSI.MIN} dBm)', priority: 'WARNING', dependencies: dep, tags: tg('iot_senal_debil', 'sintoma') }],
     },
     { uuid: uuid('uptime'), name: 'Tiempo encendido', type: 'TRAP', key: 'iot.uptime', value_type: 'UNSIGNED', units: 'uptime', tags: [{ tag: 'component', value: 'salud' }] },
   ];

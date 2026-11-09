@@ -1,5 +1,6 @@
 // Creates or updates the Zabbix dashboard "Planta Aceitera · Estado y CEP" (2 pages:
-// plant status and CEP / correlation) for the plant host provisioned by the app.
+// plant status, and what the Zabbix 8.0 CEP rules did: incidents, causes with their
+// symptoms, responsible per area) for the plant host provisioned by the app.
 //
 //   ZABBIX_URL=https://zabbix.example.com ZABBIX_API_TOKEN=... node tools/create-zabbix-dashboard.mjs
 //   optional: ZABBIX_HOST (default "Planta Aceitera"), ZABBIX_HOST_GROUP (default "Manufactura")
@@ -48,10 +49,11 @@ const graph = (x, y, w, h, title, sets, { problems = false } = {}) => ({
     f(0, 'legend', 1), f(0, 'show_problems', problems ? 1 : 0), ...(problems ? [f(1, 'problemhosts.0', HOST)] : []), f(1, 'reference', ref()),
   ],
 });
-const problems = (x, y, w, h, title, tags = [], { show = 3 } = {}) => ({
+// Problems widget. tags: [[tag, value, operator]] (operator 1 equals · 4 exists).
+const problems = (x, y, w, h, title, tags = [], { show = 3, symptoms = false, tagPriority = 'incidente,area,responsable' } = {}) => ({
   type: 'problems', name: title, x, y, width: w, height: h,
-  fields: [I(3, 'hostids.0', host.hostid), f(0, 'show', show), f(0, 'show_tags', 3), f(0, 'show_lines', 12), f(0, 'show_opdata', 1), f(0, 'highlight_row', 1),
-    ...tags.flatMap(([tag, value], i) => [f(1, `tags.${i}.tag`, tag), f(0, `tags.${i}.operator`, 1), f(1, `tags.${i}.value`, value)]), f(1, 'reference', ref())],
+  fields: [I(3, 'hostids.0', host.hostid), f(0, 'show', show), f(0, 'show_tags', 3), f(1, 'tag_priority', tagPriority), f(0, 'show_lines', 12), f(0, 'show_opdata', 1), f(0, 'highlight_row', 1), f(0, 'show_symptoms', symptoms ? 1 : 0),
+    ...tags.flatMap(([tag, value, op = 1], i) => [f(1, `tags.${i}.tag`, tag), f(0, `tags.${i}.operator`, op), f(1, `tags.${i}.value`, value)]), f(1, 'reference', ref())],
 });
 const bySeverity = (x, y, w, h) => ({ type: 'problemsbysv', name: 'Problemas por severidad', x, y, width: w, height: h, fields: [I(2, 'groupids.0', grp.groupid), f(0, 'show_type', 1), f(0, 'layout', 1), f(1, 'reference', ref())] });
 
@@ -87,20 +89,21 @@ const page1 = {
   ],
 };
 
+// Page 2: results of the native CEP rules (server/zabbix-cep.js).
 const page2 = {
-  name: 'CEP y correlación',
+  name: 'CEP de Zabbix',
   widgets: [
-    tile(0, 0, 12, 3, 'planta.cep.active_count', 'Reglas CEP activas', { dec: 0, th: [[0, GREEN], [1, ORANGE], [3, RED]] }),
-    tile(12, 0, 36, 3, 'planta.cep.last_event', 'Último evento compuesto (CEP)', { dec: 0 }),
-    tile(48, 0, 12, 3, 'planta.problems_active', 'Problemas activos (simulador)', { dec: 0, th: [[0, GREEN], [1, YELLOW], [4, RED]] }),
-    tile(60, 0, 12, 3, 'planta.wo_open', 'OT abiertas', { dec: 0, th: [[0, GREEN], [1, YELLOW], [3, RED]] }),
-    problems(0, 3, 36, 6, 'Eventos compuestos CEP', [['scope', 'cep']], { show: 2 }),
-    problems(36, 3, 36, 6, 'Causas raíz (rootcause = yes)', [['rootcause', 'yes']], { show: 2 }),
-    graph(0, 9, 36, 5, 'Reglas CEP en el tiempo (0 inactiva · 1–5 severidad)', [{ items: ['CEP: *'], color: CYAN, fill: 0 }]),
+    tile(0, 0, 18, 3, 'planta.problems_active', 'Fallas activas (simulador)', { dec: 0, th: [[0, GREEN], [1, YELLOW], [4, RED]] }),
+    tile(18, 0, 18, 3, 'planta.wo_open', 'OT abiertas', { dec: 0, th: [[0, GREEN], [1, YELLOW], [3, RED]] }),
+    tile(36, 0, 18, 3, 'planta.traffic_near_misses_today', 'Casi accidentes hoy', { dec: 0, th: [[0, GREEN], [1, YELLOW], [3, RED]] }),
+    tile(54, 0, 18, 3, 'planta.staff_escalations_today', 'Escalamientos a gerencia', { dec: 0, th: [[0, GREEN], [1, YELLOW], [3, RED]] }),
+    problems(0, 3, 36, 6, 'Incidentes CEP (patrones detectados por Zabbix)', [['incidente', '', 4]], { show: 2 }),
+    problems(36, 3, 36, 6, 'Causas con sus síntomas (ventana causa/síntomas)', [['rol', 'causa']], { show: 2, symptoms: true }),
+    problems(0, 9, 36, 5, 'Problemas por área y responsable (enriquecidos por CEP)', [['responsable', '', 4]], { show: 3, tagPriority: 'area,responsable,rol' }),
     bySeverity(36, 9, 18, 5),
     graph(54, 9, 18, 5, 'Órdenes de trabajo', [{ items: ['Planta: Mantenimiento: órdenes de trabajo abiertas'], color: ORANGE, fill: 2 }, { items: ['Planta: Personal: técnicos ocupados'], color: GREEN, fill: 0 }]),
     graph(0, 14, 36, 4, 'Tránsito interno', [{ items: ['Planta: Tránsito: vehículos detenidos en vías'], color: RED, fill: 2 }, { items: ['Planta: Tránsito: velocidad media'], color: BLUE, axis: 1, fill: 0 }], { problems: true }),
-    problems(36, 14, 36, 4, 'Síntomas (symptom = yes)', [['symptom', 'yes']], { show: 2 }),
+    problems(36, 14, 36, 4, 'Casi accidentes (repetidos descartados por CEP)', [['problema', 'casi_accidente']], { show: 3, tagPriority: 'repeticiones,area' }),
   ],
 };
 
