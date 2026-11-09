@@ -195,6 +195,12 @@ export class UI {
   }
 
   // ───────────── per snapshot ─────────────
+  // Between full frames: keep a selected truck / person (speed, braking, position) live.
+  updateFast(s) {
+    this.last = s;
+    if (this.selected && (this.selected.kind === 'truck' || this.selected.kind === 'person')) this.renderDetails(this.selected, s);
+  }
+
   update(s) {
     this.last = s;
     this.recordHistory(s);

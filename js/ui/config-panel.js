@@ -76,9 +76,10 @@ export class ConfigPanel {
     const ack = this.data.status?.ack;
     return `
       <h3>Tránsito</h3>
-      <p class="note">Los camiones aceleran, frenan, respetan la distancia de seguridad, ceden en los cruces y a los peatones. Con colisiones activas pueden chocar si un conductor se distrae o falla un freno; la vía queda bloqueada hasta que mantenimiento y la grúa la despejen.</p>
+      <p class="note">Los camiones aceleran, frenan, respetan la distancia de seguridad, ceden en los cruces y a los peatones. Con colisiones activas pueden chocar si un conductor se distrae o falla un freno; la vía queda bloqueada hasta que mantenimiento y la grúa la despejen. Con fallas aleatorias activas se generan incidentes viales (falla de frenos o conductor distraído) con la frecuencia indicada.</p>
       <button class="cfg-switch" data-act="real-collisions"><span>Permitir colisiones</span>${sw(r.collisions)}</button>
       <div class="form" id="rform">
+        <label>Incidentes viales por día (0 = solo manuales)<input name="incidentsPerDay" type="number" min="0" max="48" step="1" value="${r.incidentsPerDay ?? 8}" /></label>
         <label>Distracciones (por camión y hora)<input name="distractionPerHour" type="number" min="0" max="3" step="0.05" value="${r.distractionPerHour}" /></label>
         <label>Velocidad interna (×)<input name="speedFactor" type="number" min="0.5" max="1.5" step="0.05" value="${r.speedFactor}" /></label>
         <label>Reclamo del jefe de área (min)<input name="escalation1" type="number" min="2" max="240" value="${r.escalation1}" /></label>
@@ -350,7 +351,7 @@ export class ConfigPanel {
       case 'real-save': {
         const f = $('#rform', this.body);
         const v = (n) => Number(f.querySelector(`[name="${n}"]`).value);
-        return this.save({ realism: { distractionPerHour: v('distractionPerHour'), speedFactor: v('speedFactor'), escalation1: v('escalation1'), escalation2: v('escalation2') } });
+        return this.save({ realism: { incidentsPerDay: v('incidentsPerDay'), distractionPerHour: v('distractionPerHour'), speedFactor: v('speedFactor'), escalation1: v('escalation1'), escalation2: v('escalation2') } });
       }
     }
   }

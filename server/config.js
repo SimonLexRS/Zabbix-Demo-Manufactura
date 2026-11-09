@@ -37,6 +37,7 @@ export function defaultsFromEnv(env = process.env) {
     realism: {
       collisions: !off(env.COLLISIONS ?? '1'),
       distractionPerHour: 0.15, // chance per truck-hour of a short driver distraction
+      incidentsPerDay: num(env.ROAD_INCIDENTS, 0, 48, 8), // brake failures / distracted drivers per simulated day (with random faults on)
       speedFactor: 1,
       techsRepairManual: true,
       escalation1: 15,
@@ -100,6 +101,7 @@ export function applyPatch(cfg, patch = {}) {
   const r = patch.realism || {};
   for (const k of ['collisions', 'techsRepairManual', 'ackEvents']) if (r[k] !== undefined) c.realism[k] = !!r[k];
   if (r.distractionPerHour !== undefined) c.realism.distractionPerHour = num(r.distractionPerHour, 0, 3, c.realism.distractionPerHour);
+  if (r.incidentsPerDay !== undefined) c.realism.incidentsPerDay = num(r.incidentsPerDay, 0, 48, c.realism.incidentsPerDay);
   if (r.speedFactor !== undefined) c.realism.speedFactor = num(r.speedFactor, 0.5, 1.5, c.realism.speedFactor);
   if (r.escalation1 !== undefined) c.realism.escalation1 = num(r.escalation1, 2, 240, c.realism.escalation1);
   if (r.escalation2 !== undefined) c.realism.escalation2 = num(r.escalation2, 5, 480, c.realism.escalation2);

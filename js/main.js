@@ -6,6 +6,7 @@ import { createMaterials } from './world/materials.js';
 import { createEnvironment } from './world/environment.js';
 import { PlantView } from './world/plant.js';
 import { SnapshotBuffer, connect } from './net.js';
+import { mergeFrame } from './sim/frames.js';
 import { UI } from './ui/ui.js';
 import { ConfigPanel } from './ui/config-panel.js';
 import { PixelRenderer, loadAppearance, saveAppearance } from './world/pixel.js';
@@ -112,12 +113,23 @@ const config = new ConfigPanel({
     },
   },
 });
+// Fast frames (5 Hz) only carry what moves; the full state (1 Hz or on change) drives the
+// panels, gauges and beacons.
+let state = null;
 connect({
-  onSnapshot: (s) => {
-    snaps.push(s);
-    plant.applyState(s);
-    ui.update(s);
-    config.updateLive(s);
+  onSnapshot: (msg) => {
+    const next = mergeFrame(state, msg);
+    if (!next) return;
+    state = next;
+    snaps.push(msg);
+    plant.stationState = state.stations;
+    if (msg.k === 'f') {
+      ui.updateFast(state);
+      return;
+    }
+    plant.applyState(state);
+    ui.update(state);
+    config.updateLive(state);
   },
   onMode: (m) => ui.setMode(m),
   askToken: (msg) => ui.askToken(msg),
@@ -145,8 +157,13 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const hit = ray.intersectObjects(targets, true).find((h) => h.object.userData.pickRoot);
   select(hit ? hit.object.userData.pickRoot.userData.pick : null);
 });
+let lastHover = 0;
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (down) return;
+  // Hover cursor only: 10 checks per second are plenty.
+  const now = performance.now();
+  if (now - lastHover < 100) return;
+  lastHover = now;
   const r = renderer.domElement.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
@@ -198,9 +215,13 @@ function flyTo(target, dist, pos) {
 }
 
 // ───────────── loop ─────────────
+let viewW = 1;
+let viewH = 1;
 function resize() {
   const w = container.clientWidth;
   const h = container.clientHeight;
+  viewW = w;
+  viewH = h;
   pixel.setSize(w, h);
   labelRenderer.setSize(w, h);
   camera.aspect = w / h;
@@ -213,16 +234,18 @@ resize();
 
 const clock = new THREE.Clock();
 function frame() {
-  const dt = Math.min(0.1, clock.getDelta());
+  const raw = clock.getDelta();
+  const dt = Math.min(0.1, raw);
+  snaps.advance(Math.min(raw, 1));
   const sample = snaps.sample();
+  const speed = snaps.latest?.speed ?? 1;
   if (sample) {
-    plant.syncAgents(sample.a, sample.b, sample.alpha);
-    const t = sample.b.t;
-    env.update(dt, (t % 1440) / 60);
+    plant.syncAgents(sample, dt, speed);
+    env.update(dt, ((snaps.playT ?? sample.b.t) % 1440) / 60);
   } else {
     env.update(dt, 10);
   }
-  plant.frame(dt, snaps.latest?.speed ?? 1);
+  plant.frame(dt, speed);
 
   if (fly) {
     fly.t = Math.min(1, fly.t + dt / 1.2);
@@ -244,7 +267,7 @@ function frame() {
   controls.update();
   pixel.render();
   labelRenderer.render(scene, camera);
-  plant.declutter();
+  plant.declutter(camera, viewW, viewH);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

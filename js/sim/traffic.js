@@ -35,6 +35,7 @@ export function buildIntersections() {
 }
 
 const YARD = ROADS.find((r) => r.yard).rect;
+const inYard = (x, z) => x >= YARD[0] && x <= YARD[2] && z >= YARD[1] && z <= YARD[3];
 
 export class Traffic {
   constructor(sim) {
@@ -52,7 +53,7 @@ export class Traffic {
   zoneSpeed(v) {
     const cfg = this.sim.realism;
     if (v.x > 62) return 14; // RN4 / access
-    if (v.x >= YARD[0] && v.x <= YARD[2] && v.z >= YARD[1] && v.z <= YARD[3]) return 5.5; // yard
+    if (inYard(v.x, v.z)) return 5.5; // yard
     return 11 * cfg.speedFactor;
   }
 
@@ -88,34 +89,89 @@ export class Traffic {
     return l < 1e-3 ? { fx: Math.cos(v.h), fz: Math.sin(v.h) } : { fx: dx / l, fz: dz / l };
   }
 
-  // Nearest obstacle ahead in this vehicle's lane: vehicles and people.
-  leader(v, fx, fz) {
+  // Segments of the path ahead (from the vehicle itself), extended a bit past the end so a
+  // vehicle standing right at our destination is still seen.
+  aheadSegments(v, look) {
+    const segs = [];
+    let px = v.x;
+    let pz = v.z;
+    let s = 0;
+    let dx = Math.cos(v.h);
+    let dz = Math.sin(v.h);
+    for (let i = v.pi; v.path && i < v.path.length && s < look; i++) {
+      const p = v.path[i];
+      const len = Math.hypot(p.x - px, p.z - pz);
+      if (len < 1e-3) continue;
+      dx = (p.x - px) / len;
+      dz = (p.z - pz) / len;
+      segs.push({ ax: px, az: pz, dx, dz, len, s0: s });
+      s += len;
+      px = p.x;
+      pz = p.z;
+    }
+    if (s < look) segs.push({ ax: px, az: pz, dx, dz, len: Math.min(TRUCK_LEN + 4, look - s), s0: s });
+    return segs;
+  }
+
+  // Distance along our path to a point lying in our lane (null if it is not in our lane).
+  along(segs, x, z, band, oncomingBand, heading) {
+    let best = null;
+    for (let k = 0; k < segs.length; k++) {
+      const g = segs[k];
+      const rx = x - g.ax;
+      const rz = z - g.az;
+      const a = rx * g.dx + rz * g.dz;
+      if (a < (k === 0 ? 0 : -1) || a > g.len + 1) continue;
+      const lat = Math.abs(-rx * g.dz + rz * g.dx);
+      let w = band;
+      if (heading !== undefined && Math.cos(heading) * g.dx + Math.sin(heading) * g.dz < -0.3) w = oncomingBand;
+      if (lat > w) continue;
+      const f = g.s0 + a;
+      if (best === null || f < best) best = f;
+    }
+    return best;
+  }
+
+  // Nearest obstacle ahead in this vehicle's lane, following the path through its corners:
+  // vehicles and people.
+  leader(v) {
     let best = null;
     const look = 45;
+    const segs = this.aheadSegments(v, look);
     for (const o of this.sim.vehicles) {
       if (o === v || o.gone) continue;
       if (o.plan[o.step] === 'SLOT' && o.phase !== 'travel' && !o.crashed) continue; // parked in a yard bay
-      const dx = o.x - v.x;
-      const dz = o.z - v.z;
-      const fwd = dx * fx + dz * fz;
-      if (fwd <= 0.5 || fwd > look) continue;
-      // Oncoming traffic (opposite heading) only blocks us when it is truly in our line;
-      // otherwise it is passing in the other lane (or easing into it).
-      const oncoming = Math.cos(o.h) * fx + Math.sin(o.h) * fz < -0.3 && o.phase === 'travel';
-      if (Math.abs(-dx * fz + dz * fx) > (oncoming ? 0.6 : LANE_BAND)) continue;
+      // Oncoming traffic only blocks us when it is truly in our line; otherwise it is
+      // passing in the other lane (or easing into it).
+      const fwd = this.along(segs, o.x, o.z, LANE_BAND, o.phase === 'travel' ? 0.6 : LANE_BAND, o.h);
+      if (fwd === null || fwd <= 0.5) continue;
       const gap = fwd - TRUCK_LEN;
       if (!best || gap < best.gap) best = { gap, speed: o.speed ?? 0, obj: o, isPerson: false, stationary: (o.speed ?? 0) < 0.2 && o.phase !== 'travel' };
     }
     for (const p of this.sim.people) {
-      const dx = p.x - v.x;
-      const dz = p.z - v.z;
-      const fwd = dx * fx + dz * fz;
-      if (fwd <= 0 || fwd > look) continue;
-      if (Math.abs(-dx * fz + dz * fx) > 2) continue;
+      const fwd = this.along(segs, p.x, p.z, 2, 2);
+      if (fwd === null || fwd <= 0) continue;
       const gap = fwd - TRUCK_LEN / 2 - 0.6;
       if (!best || gap < best.gap) best = { gap, speed: 0, obj: p, isPerson: true, stationary: !p.moving };
     }
     return best;
+  }
+
+  // Overtaking is only for a vehicle parked on a through road (dwelling at a station or broken
+  // down): never one waiting in the same line as us, never when our destination is right there,
+  // never inside the truck yard.
+  canOvertake(v, L, remain) {
+    if (!L || L.isPerson || L.obj.crashed || !L.stationary) return false;
+    if (inYard(v.x, v.z) || inYard(L.obj.x, L.obj.z)) return false;
+    if (remain < L.gap + TRUCK_LEN * 2 + S0) return false;
+    // A truck holding its station reservation may pass whoever waits for that station
+    // (they cannot move until we are done). Unreserved points (RN4 shoulder, exit lane)
+    // form a line instead.
+    if (v.station) return true;
+    const o = L.obj;
+    if (o.plan[o.step] === v.plan[v.step]) return false;
+    if (o.plan[o.step] === 'GATE' && v.plan[v.step] === 'PREGATE') return false;
+    return true;
   }
 
   // Boxes the path enters within `look` units: [{id, entry}] in order.
@@ -124,6 +180,12 @@ export class Traffic {
     let px = v.x;
     let pz = v.z;
     let dist = 0;
+    // Boxes under the truck's footprint (front, middle, rear): a crossing is only free once
+    // the whole truck has left it.
+    const hx = Math.cos(v.h) * (TRUCK_LEN / 2 - 0.5);
+    const hz = Math.sin(v.h) * (TRUCK_LEN / 2 - 0.5);
+    const occ = new Set([this.boxAt(v.x, v.z), this.boxAt(v.x + hx, v.z + hz), this.boxAt(v.x - hx, v.z - hz)]);
+    occ.delete(-1);
     const cur = this.boxAt(v.x, v.z);
     let last = cur;
     for (let i = v.pi; i < v.path.length && dist < look; i++) {
@@ -132,14 +194,14 @@ export class Traffic {
       for (let s = 1.5; s <= seg && dist + s < look; s += 1.5) {
         const t = s / seg;
         const id = this.boxAt(px + (p.x - px) * t, pz + (p.z - pz) * t);
-        if (id !== -1 && id !== last && id !== cur && !out.some((o) => o.id === id)) out.push({ id, entry: dist + s });
+        if (id !== -1 && id !== last && !occ.has(id) && !out.some((o) => o.id === id)) out.push({ id, entry: dist + s });
         last = id;
       }
       dist += seg;
       px = p.x;
       pz = p.z;
     }
-    return { cur, ahead: out };
+    return { occ, ahead: out };
   }
 
   release(v, keep = new Set()) {
@@ -195,7 +257,7 @@ export class Traffic {
     let reason = null;
 
     // Car following / pedestrians.
-    const L = this.leader(v, fx, fz);
+    const L = this.leader(v);
     v.leaderId = L && !L.isPerson ? L.obj.id : null;
     // Waiting cycle (A waits for B … waits for A, typical in the yard): the truck that is
     // leaving the plant goes first, then the oldest; the others yield and let it pass.
@@ -204,7 +266,7 @@ export class Traffic {
     } else if (L) {
       const vf = Math.sqrt(Math.max(0, L.speed * L.speed + 2 * BRAKE * (L.gap - S0 - HEADWAY * v.speed * 0.3)));
       // Overtaking a stopped vehicle, or a priority vehicle (tow) passing using the other lane.
-      const overtaking = !L.isPerson && !L.obj.crashed && ((sim.t < (v.overtakeUntil ?? 0) && L.stationary) || v.priority);
+      const overtaking = !L.isPerson && !L.obj.crashed && ((sim.t < (v.overtakeUntil ?? 0) && this.canOvertake(v, L, remain)) || v.priority);
       v.passing = overtaking && (L.gap < 14 || sim.t < (v.overtakeUntil ?? 0));
       if (!ignoring && !overtaking && vf < target) {
         target = vf;
@@ -214,8 +276,8 @@ export class Traffic {
 
     // Intersections: reserve the next crossing(s) before entering; otherwise stop at the line.
     const look = Math.max(16, (v.speed * v.speed) / (2 * BRAKE) + 10);
-    const { cur, ahead } = this.boxesAhead(v, look);
-    const keep = new Set(cur === -1 ? [] : [cur]);
+    const { occ, ahead } = this.boxesAhead(v, look);
+    const keep = new Set(occ);
     if (ahead.length) {
       // Reserve chained crossings (exit of one ≈ entry of the next) atomically.
       const chain = [ahead[0]];
@@ -228,14 +290,18 @@ export class Traffic {
           keep.add(b.id);
         }
       } else {
-        const vb = Math.sqrt(2 * BRAKE * Math.max(0, chain[0].entry - 2));
+        // Stop with the front bumper at the line (the entry is measured from the truck's centre).
+        const vb = Math.sqrt(2 * BRAKE * Math.max(0, chain[0].entry - TRUCK_LEN / 2 - 1));
         if (vb < target) {
           target = vb;
           reason = 'cruce';
+          // For cycle detection we are waiting for whoever holds the crossing.
+          const held = chain.find((b) => this.owner.has(b.id) && this.owner.get(b.id) !== v.id);
+          if (held) v.leaderId = this.owner.get(held.id);
         }
       }
     }
-    if (cur !== -1) this.owner.set(cur, v.id);
+    for (const id of occ) this.owner.set(id, v.id);
     this.release(v, keep);
 
     // Longitudinal dynamics.
@@ -255,12 +321,25 @@ export class Traffic {
     v.braking = v.speed < prev - 0.05 || (reason && v.speed < 0.5);
     v.waitReason = v.speed < 0.3 ? reason : null;
 
-    // Move.
+    // Move. A driver who is paying attention never closes in below half the standstill gap
+    // (this keeps queues tidy even around corners); only an unbraked truck can hit.
+    let dist = v.speed * dt;
+    if (L && !ignoring && !v.passing && !v.priority) {
+      const room = Math.max(0, L.gap - (L.isPerson ? 0.5 : S0 * 0.5) + L.speed * dt);
+      if (dist > room) {
+        dist = room;
+        v.speed = Math.min(v.speed, Math.max(L.speed, room / dt));
+        v.braking = true;
+      }
+    }
+    // Brake lights stay on a little while (no flicker between steps).
+    if (v.braking) v.brakeUntil = sim.t + 0.6;
+    else v.braking = sim.t < (v.brakeUntil ?? 0);
     let arrived = false;
-    if (remain <= 0.6 && v.speed < 4) {
+    if (remain <= 0.6 && v.speed < 4 && dist >= Math.min(remain, v.speed * dt)) {
       arrived = moveTo(v, remain + 1);
       v.speed = 0;
-    } else arrived = moveTo(v, v.speed * dt);
+    } else arrived = moveTo(v, dist);
 
     // Contacts.
     if (!L) v.passing = sim.t < (v.overtakeUntil ?? 0) && v.speed > 0.5;
@@ -279,7 +358,7 @@ export class Traffic {
     // Waiting management: overtake stopped obstacles, flagman for blocked crossings.
     if (v.speed < 0.3) v.blockedFor = (v.blockedFor ?? 0) + dt;
     else v.blockedFor = 0;
-    if (L && L.stationary && !L.isPerson && !L.obj.crashed && v.blockedFor > 2 && this.oncomingClear(v, fx, fz)) {
+    if (L && this.canOvertake(v, L, remain) && v.blockedFor > 2 && this.oncomingClear(v, fx, fz)) {
       v.overtakeUntil = sim.t + 3;
       v.blockedFor = 0;
       sim.counters.overtakes++;
@@ -293,8 +372,7 @@ export class Traffic {
     }
     if (reason === 'peaton' && v.blockedFor > 2 && L?.obj && !L.obj.moving) {
       // A person standing in the lane steps aside to let the truck through.
-      L.obj.x += -fz * 3.5;
-      L.obj.z += fx * 3.5;
+      L.obj.dodge = { dx: -fz, dz: fx, left: 3.5 };
       v.blockedFor = 0;
     }
     return arrived;
@@ -320,10 +398,11 @@ export class Traffic {
     sim.counters.nearMisses++;
     // The person jumps aside (no one is ever run over).
     const { fx, fz } = this.direction(v);
-    person.x += -fz * 3.2;
-    person.z += fx * 3.2;
-    person.path = null;
-    person.wait = 1;
+    person.dodge = { dx: -fz, dz: fx, left: 3.2 };
+    if (!person.task) {
+      person.path = null;
+      person.wait = 1;
+    }
     const why = ignoring ? (v.brakeFail ? 'camión sin frenos' : 'conductor distraído') : 'frenado al límite';
     sim.log(ignoring ? 3 : 2, `Casi accidente: ${person.name} y camión ${v.plate} (${why})`, 'PLAYA', 'seguridad');
     sim.staff?.nearMiss(v, person);

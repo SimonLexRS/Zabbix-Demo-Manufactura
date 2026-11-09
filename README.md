@@ -6,7 +6,7 @@ La simulación corre en el **servidor** y expone **métricas para Zabbix** (HTTP
 
 ```mermaid
 flowchart LR
-  SIM["Simulación (Node)<br/>motor por ticks · A* · proceso · triggers"] -->|SSE 5 Hz| WEB["Cliente 3D Three.js<br/>interpolación · picking · HUD"]
+  SIM["Simulación (Node)<br/>motor por ticks · A* · proceso · triggers"] -->|SSE 5 Hz + gzip| WEB["Cliente 3D Three.js<br/>interpolación · picking · HUD"]
   SIM -->|"/api/metrics (HTTP agent)"| ZBX["Zabbix<br/>ítems dependientes · LLD · triggers"]
   SIM -->|"/metrics"| PROM["Prometheus (opcional)"]
   WEB -->|"POST /api/control (velocidad, fallas)"| SIM
@@ -20,7 +20,7 @@ flowchart LR
 |---|---|
 | Motor por ticks en el backend (`convex/aiTown/main.ts` → `runStep`) | `js/sim/simulation.js` → `advance()` corre en `server/server.js` cada 200 ms |
 | Grilla + A\* con `MinHeap` (`movement.ts` → `findRoute`) | `js/sim/grid.js` (camiones sobre caminos, operarios entre edificios) + desplazamiento al carril derecho |
-| Interpolación histórica (`historicalObject.ts`) | `js/net.js` → `SnapshotBuffer`: el cliente dibuja 260 ms en el pasado e interpola |
+| Interpolación histórica (`historicalObject.ts`) | `js/net.js` → `SnapshotBuffer`: el cliente reproduce sobre el reloj de la simulación con un colchón adaptado al jitter de la red (0,35–1 s) y `js/world/plant.js` interpola con curvas (Hermite/Catmull-Rom) y giro suavizado |
 | Agentes con planes/operaciones | Camiones con plan de etapas y reservas de estaciones; operarios con rondas |
 | `PlayerDetails`, `Messages`, `DebugTimeManager` | Panel de detalle con ítems Zabbix, feed de problemas/eventos, control de velocidad |
 | Clientes suscritos a Convex | Clientes suscritos por Server-Sent Events (`/api/stream`) |
@@ -44,7 +44,7 @@ flowchart LR
 | `/api/zabbix/discovery/{silos,tanks,boilers,stations}` | JSON LLD directo |
 | `/metrics` | Formato Prometheus (gauges `planta_*`) |
 | `/api/state` | Último snapshot completo |
-| `/api/stream` | SSE 5 Hz para el cliente |
+| `/api/stream` | SSE para el cliente: cada 200 ms un cuadro rápido (vehículos, personas, flujos, estaciones) y cada 1 s —o al cambiar una falla u OT— el estado completo; con gzip (`js/sim/frames.js`) |
 | `GET/POST /api/problems` | Puntos problemáticos (ver abajo) |
 | `/api/zabbix/status` | Estado del envío con Zabbix sender y del alta automática |
 | `POST /api/control` | `{"speed":5}` |
@@ -93,9 +93,11 @@ Botón **Configuración** en la barra inferior. Los cambios se aplican en calien
 - **Manejo**: los camiones aceleran y frenan con límites reales, bajan la velocidad antes de las curvas y de cada parada, y mantienen distancia de seguridad con el vehículo de adelante.
 - **Cruces**: reservan el cruce antes de entrar; si está ocupado, se detienen en la línea.
 - **Peatones**: ceden el paso a los operarios que cruzan.
-- **Sobrepaso**: adelantan a camiones detenidos por el otro carril.
-- **Ingreso**: esperan en la banquina de RN4 y entran a la portería de a uno.
+- **Carriles**: las rutas se alinean al eje de cada camino, así cada sentido circula por su carril; en los cruces el camión espera con el paragolpes en la línea y libera el cruce cuando lo dejó entero.
+- **Sobrepaso**: adelantan por el otro carril solo a un camión estacionado en una estación o averiado; nunca a uno que espera en la misma fila, ni dentro de la playa.
+- **Ingreso**: forman fila en la banquina de RN4 (fuera de los carriles) y entran a la portería de a uno.
 - **Destrabes**: si se forma un ciclo de espera, sale primero el que se retira de planta. Si un cruce queda trabado, el supervisor hace de señalero.
+- **Incidentes viales**: con fallas aleatorias activas, cada pocas horas simuladas (por defecto 8 por día, `ROAD_INCIDENTS` o Configuración → Realismo) falla el freno de un camión o un conductor se distrae.
 - **Colisiones**: un camión sin frenos (falla `brake_fail`) o con el conductor distraído puede chocar. El camión chocado enciende las balizas y pone un triángulo; la vía queda bloqueada hasta que llegan mecánico, técnico de seguridad y **grúa**, y luego los camiones dañados se retiran.
 - **Casi accidentes**: si un camión frena al límite cerca de una persona se registra como casi accidente. Nunca hay atropellos.
 
@@ -136,6 +138,7 @@ Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 
 | `ZABBIX_NETWORK` | `zabbix-testing-lab01-mybwkj_default` | Red Docker del stack de Zabbix (solo compose) |
 | `RANDOM_FAULTS` | `1` | `0` = solo fallas manuales |
 | `COLLISIONS` | `1` | `0` = sin colisiones (los conductores siempre frenan) |
+| `ROAD_INCIDENTS` | `8` | incidentes viales (falla de frenos / conductor distraído) por día simulado con fallas aleatorias activas; `0` = solo manuales |
 | `ZABBIX_ACK` | `1` | `0` = no registrar acciones del personal en Zabbix |
 | `SIM_SPEED` | `1` | 1 min simulado por segundo |
 | `CONTROL_TOKEN` | — | Clave de administrador: si se define, los POST/PUT (fallas, configuración) exigen `x-control-token` |
@@ -166,7 +169,8 @@ Para regenerar los templates después de cambiar métricas: `node tools/gen-zabb
 ```
 index.html, css/            UI (HUD, panel, feed, controles)
 js/main.js                  render, cámara, picking, seguimiento, recorrido
-js/net.js                   SSE + interpolación (o simulación local si no hay servidor)
+js/net.js                   SSE + reloj de reproducción (o simulación local si no hay servidor)
+js/sim/frames.js            formato del stream: cuadros rápidos / completos
 js/sim/layout.js            layout de planta (compartido servidor/cliente)
 js/sim/grid.js              grilla y A*
 js/sim/simulation.js        motor, proceso, camiones, operarios, triggers, métricas, ítems sender

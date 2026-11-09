@@ -131,25 +131,39 @@ export class PlantView {
     return el;
   }
 
-  // Hide labels that overlap on screen (higher priority and nearer first). Throttled.
-  declutter() {
+  // Fades out labels that overlap on screen (higher priority and nearer first). Positions come
+  // from projecting each label with the camera and sizes are cached per text, so this never
+  // forces a layout every frame; labels fade instead of popping.
+  declutter(camera, width, height) {
     const now = performance.now();
-    if (!this.labelsVisible || now - (this.lastDeclutter || 0) < 250) return;
+    if (!this.labelsVisible || now - (this.lastDeclutter || 0) < 200) return;
     this.lastDeclutter = now;
+    const v = this._v || (this._v = new THREE.Vector3());
     const items = [];
     for (const o of this.labels) {
       const el = o.element;
       if (el.style.display === 'none') continue;
-      el.style.visibility = 'visible';
-      items.push({ el, prio: o.userData.prio, r: el.getBoundingClientRect() });
+      o.getWorldPosition(v).project(camera);
+      if (v.z < -1 || v.z > 1) continue;
+      const html = el.innerHTML;
+      if (o.userData.sizeFor !== html) {
+        o.userData.sizeFor = html;
+        o.userData.w = el.offsetWidth || 60;
+        o.userData.h = el.offsetHeight || 18;
+      }
+      const x = (v.x * 0.5 + 0.5) * width;
+      const y = (-v.y * 0.5 + 0.5) * height - 4;
+      const w = o.userData.w;
+      const h = o.userData.h;
+      items.push({ el, prio: o.userData.prio, r: { left: x - w * o.center.x, right: x + w * (1 - o.center.x), top: y - h * o.center.y, bottom: y + h * (1 - o.center.y) } });
     }
     items.sort((a, b) => b.prio - a.prio || b.r.bottom - a.r.bottom);
     const placed = [];
     for (const it of items) {
       const { r } = it;
       const hit = placed.some((p) => r.left < p.right + 3 && r.right > p.left - 3 && r.top < p.bottom + 2 && r.bottom > p.top - 2);
-      if (hit) it.el.style.visibility = 'hidden';
-      else placed.push(r);
+      if (hit !== it.el.classList.contains('lbl-off')) it.el.classList.toggle('lbl-off', hit);
+      if (!hit) placed.push(r);
     }
   }
 
@@ -348,6 +362,7 @@ export class PlantView {
 
   select(pick) {
     this.selected = pick;
+    this.selInfo = null;
     this.selRing.visible = !!pick;
   }
 
@@ -368,13 +383,11 @@ export class PlantView {
     for (const st of s.storages) {
       const g = this.gauges.get(st.id);
       if (g) g.set(st.pct, st.temp > 32 ? 0xe5484d : levelColor(st.pct));
-      const el = this.storeLabels.get(st.id);
-      if (el) el.innerHTML = `<b>${st.id}</b> <span>${st.pct.toFixed(0)}%</span>`;
+      setHtml(this.storeLabels.get(st.id), `<b>${st.id}</b> <span>${st.pct.toFixed(0)}%</span>`);
     }
     for (const t of s.tanks) {
       this.gauges.get(t.id)?.set(t.pct, levelColor(t.pct));
-      const el = this.storeLabels.get(t.id);
-      if (el) el.innerHTML = `<b>${t.id}</b> <span>${t.pct.toFixed(0)}%</span>`;
+      setHtml(this.storeLabels.get(t.id), `<b>${t.id}</b> <span>${t.pct.toFixed(0)}%</span>`);
     }
     this.gauges.get('SP')?.set((s.buffer.stock / s.buffer.cap) * 100, 0x2fbf71);
     for (const b of s.boilers) {
@@ -434,10 +447,20 @@ export class PlantView {
   }
 
   // ───────────── per-frame updates (interpolated) ─────────────
-  syncAgents(a, b, alpha) {
+  // `smp` holds four frames around the playback time (p0, a, b, p3) and alpha between a and b:
+  // positions follow a smooth curve through the frames (corners become bends instead of
+  // zigzags) and the heading follows the curve, turning at a limited rate.
+  syncAgents(smp, dt, speed) {
+    const { p0, a, b, p3, alpha } = smp;
+    const k = Math.max(1, Math.min(speed || 1, 8));
+    const ease = (rate) => 1 - Math.exp(-dt * rate);
+    const byId = (snap, key) => (snap[`_${key}`] ??= new Map(snap[key].map((o) => [o.id, o])));
+
     // Vehicles.
     const seen = new Set();
-    const prevById = new Map(a.vehicles.map((v) => [v.id, v]));
+    const A = byId(a, 'vehicles');
+    const P0 = byId(p0, 'vehicles');
+    const P3 = byId(p3, 'vehicles');
     for (const v of b.vehicles) {
       seen.add(v.id);
       let g = this.vehicles.get(v.id);
@@ -449,32 +472,34 @@ export class PlantView {
         this.scene.add(g);
         this.vehicles.set(v.id, g);
       }
-      const p = prevById.get(v.id) || v;
-      const h = lerpAngle(p.h, v.h, alpha);
+      const ud = g.userData;
+      const va = A.get(v.id) || v;
+      const pos = curvePoint(P0.get(v.id) || va, va, v, P3.get(v.id) || v, alpha, ud.pos || (ud.pos = { x: 0, z: 0 }));
+      const dir = curveDir(P0.get(v.id) || va, va, v, P3.get(v.id) || v, alpha);
+      const want = dir === null ? lerpAngle(va.h, v.h, Math.min(1, alpha)) : dir;
+      ud.yaw = ud.yaw === undefined ? want : turnToward(ud.yaw, want, ease(7), 2.4 * k * dt);
       // Overtaking / priority passing: drive in the opposite lane (shifted to the left).
-      g.userData.lat += ((v.passing ? 3.4 : 0) - g.userData.lat) * 0.12;
-      const lx = Math.sin(h) * g.userData.lat;
-      const lz = -Math.cos(h) * g.userData.lat;
-      g.position.set(lerp(p.x, v.x, alpha) + lx, 0, lerp(p.z, v.z, alpha) + lz);
-      g.rotation.y = -h - (v.crashed ? v.tilt : 0);
-      const load = g.userData.load;
+      ud.lat += ((v.passing ? 3.4 : 0) - ud.lat) * ease(3 * k);
+      g.position.set(pos.x + Math.sin(ud.yaw) * ud.lat, 0, pos.z - Math.cos(ud.yaw) * ud.lat);
+      g.rotation.y = -ud.yaw - (v.crashed ? v.tilt : 0);
+      const load = ud.load;
       if (load) {
         const l = Math.max(0.02, v.loaded);
         load.scale.y = l * 1.6;
         load.position.y = 1.3 + (l * 1.6) / 2;
       }
-      g.userData.brakeMat.emissiveIntensity = v.braking || v.crashed || (!v.moving && v.speedKmh === 0 && v.waitReason) ? 2.2 : 0.12;
+      ud.brakeMat.emissiveIntensity = v.braking || v.crashed || (!v.moving && v.speedKmh === 0 && v.waitReason) ? 2.2 : 0.12;
       // Warning triangle behind a crashed truck.
-      if (v.crashed && !g.userData.triangle) {
+      if (v.crashed && !ud.triangle) {
         const tri = B.warningTriangle();
         tri.position.set(-9, 0, 0);
         g.add(tri);
-        g.userData.triangle = tri;
-      } else if (!v.crashed && g.userData.triangle) {
-        g.remove(g.userData.triangle);
-        g.userData.triangle = null;
+        ud.triangle = tri;
+      } else if (!v.crashed && ud.triangle) {
+        g.remove(ud.triangle);
+        ud.triangle = null;
       }
-      g.userData.state = v;
+      ud.state = v;
     }
     for (const [id, g] of this.vehicles) {
       if (!seen.has(id)) {
@@ -484,7 +509,9 @@ export class PlantView {
       }
     }
     // People.
-    const prevP = new Map(a.people.map((p) => [p.id, p]));
+    const PA = byId(a, 'people');
+    const PP0 = byId(p0, 'people');
+    const PP3 = byId(p3, 'people');
     for (const p of b.people) {
       let g = this.people.get(p.id);
       if (!g) {
@@ -501,16 +528,21 @@ export class PlantView {
         this.scene.add(g);
         this.people.set(p.id, g);
       }
-      const q = prevP.get(p.id) || p;
-      g.position.set(lerp(q.x, p.x, alpha), 0, lerp(q.z, p.z, alpha));
-      g.rotation.y = -lerpAngle(q.h, p.h, alpha);
-      g.userData.moving = p.moving;
+      const ud = g.userData;
+      const q = PA.get(p.id) || p;
+      const pos = curvePoint(PP0.get(p.id) || q, q, p, PP3.get(p.id) || p, alpha, ud.pos || (ud.pos = { x: 0, z: 0 }));
+      const dir = curveDir(PP0.get(p.id) || q, q, p, PP3.get(p.id) || p, alpha);
+      const want = dir === null ? lerpAngle(q.h, p.h, Math.min(1, alpha)) : dir;
+      ud.yaw = ud.yaw === undefined ? want : turnToward(ud.yaw, want, ease(12), 7 * k * dt);
+      g.position.set(pos.x, 0, pos.z);
+      g.rotation.y = -ud.yaw;
+      ud.moving = p.moving;
       // Technicians ride a cart while driving to/from a job (sitting a bit higher).
-      if (g.userData.cart) {
+      if (ud.cart) {
         const riding = p.moving;
-        g.userData.cart.visible = riding;
-        g.userData.legs.visible = !riding;
-        g.children.forEach((c) => c !== g.userData.cart && c !== g.userData.legs && (c.position.y = (c.userData.baseY ??= c.position.y) + (riding ? 0.45 : 0)));
+        ud.cart.visible = riding;
+        ud.legs.visible = !riding;
+        g.children.forEach((c) => c !== ud.cart && c !== ud.legs && (c.position.y = (c.userData.baseY ??= c.position.y) + (riding ? 0.45 : 0)));
       }
       this.bubble(g, p.say);
     }
@@ -591,18 +623,22 @@ export class PlantView {
       b.children[0].position.y = Math.sin(this.time * 3) * 0.6;
       b.rotation.y += dt * 2;
     }
-    // Selection ring follows the selected object.
+    // Selection ring follows the selected object (its size is measured once).
     if (this.selected) {
       const obj = this.findObject(this.selected);
       if (!obj) {
         this.selRing.visible = false;
       } else {
-        const box = new THREE.Box3().setFromObject(obj);
-        const size = box.getSize(new THREE.Vector3());
-        const c = box.getCenter(new THREE.Vector3());
-        const r = Math.max(size.x, size.z) * 0.62 + 1.5;
-        this.selRing.position.set(c.x, 0.3, c.z);
-        this.selRing.scale.setScalar(r * (1 + Math.sin(this.time * 4) * 0.04));
+        if (this.selInfo?.obj !== obj) {
+          const box = new THREE.Box3().setFromObject(obj);
+          const size = box.getSize(new THREE.Vector3());
+          const c = box.getCenter(new THREE.Vector3());
+          const moving = this.selected.kind === 'truck' || this.selected.kind === 'person';
+          this.selInfo = { obj, r: Math.max(size.x, size.z) * (moving ? 0.5 : 0.62) + 1.5, dx: moving ? 0 : c.x - obj.position.x, dz: moving ? 0 : c.z - obj.position.z };
+        }
+        const si = this.selInfo;
+        this.selRing.position.set(obj.position.x + si.dx, 0.3, obj.position.z + si.dz);
+        this.selRing.scale.setScalar(si.r * (1 + Math.sin(this.time * 4) * 0.04));
         this.selRing.visible = true;
       }
     }
@@ -617,4 +653,66 @@ function lerpAngle(a, b, t) {
   while (d > Math.PI) d -= Math.PI * 2;
   while (d < -Math.PI) d += Math.PI * 2;
   return a + d * t;
+}
+
+function setHtml(el, html) {
+  if (el && el.innerHTML !== html) el.innerHTML = html;
+}
+
+// Turns `cur` toward `want` (radians) with smoothing `f` and at most `max` per call.
+function turnToward(cur, want, f, max) {
+  let d = want - cur;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return cur + Math.max(-max, Math.min(max, d * f));
+}
+
+// Cubic Hermite through frames p1 → p2 with Catmull-Rom tangents, limited so a vehicle that
+// stops or starts never overshoots. Past p2 (t > 1) it extrapolates in a straight line.
+function curvePoint(p0, p1, p2, p3, t, out) {
+  const dx = p2.x - p1.x;
+  const dz = p2.z - p1.z;
+  const d = Math.hypot(dx, dz);
+  if (t >= 1 || d < 0.02) {
+    out.x = p1.x + dx * t;
+    out.z = p1.z + dz * t;
+    return out;
+  }
+  const m1 = tangent(p0, p2, d);
+  const m2 = tangent(p1, p3, d);
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + t;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  out.x = h00 * p1.x + h10 * m1.x + h01 * p2.x + h11 * m2.x;
+  out.z = h00 * p1.z + h10 * m1.z + h01 * p2.z + h11 * m2.z;
+  return out;
+}
+
+function tangent(a, b, d) {
+  let x = (b.x - a.x) / 2;
+  let z = (b.z - a.z) / 2;
+  const l = Math.hypot(x, z);
+  if (l > d * 1.2) {
+    x *= (d * 1.2) / l;
+    z *= (d * 1.2) / l;
+  }
+  return { x, z };
+}
+
+// Direction of travel along the curve (null when standing still).
+const _c1 = { x: 0, z: 0 };
+const _c2 = { x: 0, z: 0 };
+function curveDir(p0, p1, p2, p3, t) {
+  if (Math.hypot(p2.x - p1.x, p2.z - p1.z) < 0.02) return null;
+  const ta = Math.max(0, Math.min(1, t) - 0.04);
+  const tb = Math.min(1, Math.min(1, t) + 0.04);
+  curvePoint(p0, p1, p2, p3, ta, _c1);
+  curvePoint(p0, p1, p2, p3, tb, _c2);
+  const dx = _c2.x - _c1.x;
+  const dz = _c2.z - _c1.z;
+  if (Math.hypot(dx, dz) < 1e-4) return null;
+  return Math.atan2(dz, dx);
 }

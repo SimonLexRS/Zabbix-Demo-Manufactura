@@ -18,7 +18,22 @@ import { Staff, STAFF, LOOK, WORKSHOP_SPOT } from './staff.js';
 export const SEVERITY = ['Información', 'Advertencia', 'Promedio', 'Alta', 'Desastre'];
 export const NOMINAL_CRUSH = 1.05; // t/min ≈ 1500 t/day
 const PERSON_SPEED = 1.4;
-export const DEFAULT_REALISM = { collisions: true, distractionPerHour: 0.15, speedFactor: 1, techsRepairManual: true, escalation1: 15, escalation2: 40 };
+export // Heading of the road a route ends on: the last segment that is not a short lane merge,
+// snapped to the road axis.
+function roadHeading(path, fallback) {
+  for (let i = (path?.length ?? 0) - 1; i > 0; i--) {
+    const dx = path[i].x - path[i - 1].x;
+    const dz = path[i].z - path[i - 1].z;
+    if (Math.hypot(dx, dz) >= 5) return Math.round(Math.atan2(dz, dx) / (Math.PI / 2)) * (Math.PI / 2);
+  }
+  return fallback;
+}
+
+// Waiting points on the RN4 shoulders, beside the driving lanes (northbound ≈ x 76, southbound ≈ x 72).
+const PREGATE_SOY = { x: 80, z: 86 };
+const PREGATE_DISPATCH = { x: 68, z: 56 };
+
+const DEFAULT_REALISM = { collisions: true, incidentsPerDay: 8, distractionPerHour: 0.15, speedFactor: 1, techsRepairManual: true, escalation1: 15, escalation2: 40 };
 const ORIGINS = ['San Julián', 'Cuatro Cañadas', 'Pailón', 'Okinawa', 'Montero', 'Mineros', 'Guarayos', 'San Pedro', 'Fernández Alonso'];
 const FIRST = ['Juan', 'Carlos', 'Luis', 'Marco', 'Jorge', 'Pedro', 'Raúl', 'Diego', 'Mario', 'Hugo', 'Óscar', 'Wilson', 'Edwin', 'Fredy'];
 const LAST = ['Rojas', 'Vargas', 'Gutiérrez', 'Mamani', 'Suárez', 'Justiniano', 'Áñez', 'Ribera', 'Flores', 'Peña', 'Saucedo', 'Melgar'];
@@ -340,7 +355,34 @@ export class Simulation {
       if (free.length) this.setProblem(pick(free).id, true, 'random');
       this.nextRandomFault = this.t + rand(120, 360);
     }
+    // Road incidents (brake failure or a distracted driver) on their own schedule, so traffic
+    // realism shows up every few simulated hours instead of once a day.
+    const perDay = this.realism.incidentsPerDay ?? 8;
+    if (this.randomFaults && this.realism.collisions && perDay > 0) {
+      this.nextIncident ??= this.t + rand(20, 60);
+      if (this.t >= this.nextIncident) this.nextIncident = this.t + (this.roadIncident() ? Math.max(30, expo(1440 / perDay)) : 3);
+    } else this.nextIncident = null;
     for (const b of this.boilers) b.on = !this.hasFault('boiler_trip', b.id);
+  }
+
+  // Starts a road incident; false when the roads are not in a state to have one now.
+  roadIncident() {
+    if (this.collision || this.active.has('brake_fail') || this.active.has('vehicle_collision')) return false;
+    if (Math.random() < 0.5) {
+      const moving = this.vehicles.some((v) => v.phase === 'travel' && v.kind !== 'tow' && (v.speed ?? 0) > 1.5 && v.x < 64);
+      if (!moving) return false;
+      return this.setProblem('brake_fail', true, 'random') !== false;
+    }
+    // Distracted driver: a truck that has another vehicle ahead stops watching the road.
+    const cands = this.vehicles
+      .filter((v) => v.phase === 'travel' && !v.crashed && v.kind !== 'tow' && (v.speed ?? 0) > 3)
+      .map((v) => ({ v, L: this.traffic.leader(v) }))
+      .filter((c) => c.L && !c.L.isPerson && c.L.gap < 35);
+    if (!cands.length) return false;
+    const { v } = cands[Math.floor(Math.random() * cands.length)];
+    v.distractedUntil = this.t + 1.2;
+    this.log(2, `Conductor distraído: el camión ${v.plate} (${v.driver}) no mira la vía`, 'VIA', 'transito');
+    return true;
   }
 
   // ───────────────────────────── process ─────────────────────────────
@@ -449,7 +491,7 @@ export class Simulation {
     if (this.t >= this.nextSpawn.soy) {
       this.nextSpawn.soy = this.t + expo(day ? 24 : 48);
       const freeSlot = this.yard.find((s) => !s.truck);
-      const gateBusy = this.rn4Queue() >= 3 || this.stationDown('GATE');
+      const gateBusy = this.rn4Queue() >= 3 || this.stationDown('GATE') || !this.spawnClear('soy');
       if (freeSlot && !gateBusy && this.vehicles.length < 18) {
         this.spawnTruck('soy');
         this.roadQueue = Math.max(0, this.roadQueue - 1);
@@ -459,11 +501,13 @@ export class Simulation {
       }
     }
     // Trucks waiting on the highway enter as soon as there is room.
-    if (this.roadQueue > 0 && this.yard.some((s) => !s.truck) && this.rn4Queue() < 2 && !this.stationDown('GATE') && this.vehicles.length < 18) {
+    if (this.roadQueue > 0 && this.yard.some((s) => !s.truck) && this.rn4Queue() < 2 && !this.stationDown('GATE') && this.vehicles.length < 18 && this.spawnClear('soy')) {
       this.spawnTruck('soy');
       this.roadQueue--;
     }
     const oilStock = this.tanks.reduce((a, t) => a + t.stock, 0);
+    if (this.t >= this.nextSpawn.oil && !this.spawnClear('oil')) this.nextSpawn.oil = this.t + 1;
+    if (this.t >= this.nextSpawn.meal && !this.spawnClear('meal')) this.nextSpawn.meal = this.t + 1;
     if (this.t >= this.nextSpawn.oil) {
       this.nextSpawn.oil = this.t + expo(110);
       if (oilStock > 1200 && this.vehicles.filter((v) => v.kind === 'oil').length < 2) this.spawnTruck('oil');
@@ -472,6 +516,12 @@ export class Simulation {
       this.nextSpawn.meal = this.t + expo(36);
       if (this.meal.stock > 1000 && this.vehicles.filter((v) => v.kind === 'meal').length < 3) this.spawnTruck('meal');
     }
+  }
+
+  // A new truck only appears on RN4 when there is room at the edge of the map.
+  spawnClear(kind) {
+    const sp = kind === 'soy' ? SPAWN.south : SPAWN.north;
+    return !this.vehicles.some((o) => !o.gone && Math.hypot(o.x - sp.x, o.z - sp.z) < 18);
   }
 
   // Soy trucks already on RN4 waiting for the gate.
@@ -572,7 +622,7 @@ export class Simulation {
     } else if (step === 'PREGATE') {
       // Wait on the RN4 shoulder, in the driving direction, before the access road (not reserved:
       // trucks queue behind each other on the highway).
-      dest = v.kind === 'soy' ? { x: 74, z: 86 } : { x: 74, z: 56 };
+      dest = v.kind === 'soy' ? PREGATE_SOY : PREGATE_DISPATCH;
     } else if (step === 'GATE_OUT') {
       dest = this.stations.GATE; // exit lane: never reserved, so trucks leaving can never deadlock
     } else {
@@ -672,7 +722,11 @@ export class Simulation {
         // straight line from/to the C3 road, through the gaps of the staggered rows.
         const from = { x: v.x, z: v.z };
         const route = (a, b) => this.roadNoYard.findPath(a, b) || this.road.findPath(a, b);
-        if (step === 'SLOT') {
+        if (step === 'PREGATE') {
+          // Straight along RN4 onto the shoulder: the line of waiting trucks forms behind.
+          const dir = Math.sign(dest.z - v.z) || 1;
+          v.path = [from, { x: dest.x, z: v.z + dir * 14 }, { x: dest.x, z: dest.z }];
+        } else if (step === 'SLOT') {
           const raw = route(from, { x: dest.x, z: YARD_AISLE_Z });
           v.path = [...(raw ? lanePath(raw, v) : [from]), { x: dest.x, z: YARD_AISLE_Z + 6 }, { x: dest.x, z: dest.z }];
         } else if (v.plan[v.step - 1] === 'SLOT') {
@@ -698,6 +752,8 @@ export class Simulation {
         v.speed = 0;
         v.wait = this.dwellTime(v, step);
         if (step === 'SLOT') v.h = -Math.PI / 2;
+        // Park aligned with the road (the last bit of the route is often a short lane merge).
+        else v.h = roadHeading(v.path, v.h);
         if (step === 'HOPPER' || step === 'BAL_IN' || step === 'BAL_OUT' || step === 'BAL_D' || step === 'BAL_DS' || step === 'SAMP' || step === 'OL' || step === 'ML') {
           this.stations[v.station].opsToday++;
         }
@@ -803,6 +859,16 @@ export class Simulation {
   }
 
   updatePerson(p, dt) {
+    // Stepping aside from a truck: a quick sidestep over a few tenths of a second.
+    if (p.dodge) {
+      const d = Math.min(p.dodge.left, 8 * dt);
+      p.x += p.dodge.dx * d;
+      p.z += p.dodge.dz * d;
+      p.dodge.left -= d;
+      p.moving = true;
+      if (p.dodge.left <= 1e-3) p.dodge = null;
+      return;
+    }
     // Staff with a task (work order, inspection, evacuation): walk there and stay.
     if (p.task) {
       if (p.path) {

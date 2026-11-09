@@ -4,7 +4,7 @@
 // loop; browsers only render the snapshots they receive (Server-Sent Events).
 //
 //   GET  /                         3D client (static files)
-//   GET  /api/stream               SSE snapshots (5 Hz) for the 3D client
+//   GET  /api/stream               SSE frames for the 3D client (5 Hz fast + 1 Hz full, gzip)
 //   GET  /api/state                current snapshot (JSON)
 //   GET  /api/metrics              flat metrics for Zabbix HTTP agent (pull alternative)
 //   GET  /api/zabbix/discovery/{silos|tanks|boilers|stations}  LLD JSON
@@ -23,6 +23,7 @@
 
 import http from 'node:http';
 import net from 'node:net';
+import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,10 +35,12 @@ import { sendValues } from './zabbix-sender.js';
 import { makeRpc, provision, setCorrelation, getCorrelation } from './zabbix-provision.js';
 import { ZabbixAck } from './zabbix-ack.js';
 import { ConfigStore } from './config.js';
+import { encodeFrame, urgentSignature } from '../js/sim/frames.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
 const TICK_MS = 200;
+const FULL_EVERY = 5; // full snapshot every 5 ticks (1 s)
 const CONTROL_TOKEN = process.env.CONTROL_TOKEN || '';
 const TEMPLATES = { templateFile: path.join(ROOT, 'zabbix', 'template_planta_aceitera_sender.yaml'), iotTemplateFile: path.join(ROOT, 'zabbix', 'template_planta_aceitera_iot.yaml') };
 const PUBLIC = new Set(['index.html', 'css', 'js', 'favicon.svg']);
@@ -237,17 +240,66 @@ const zabbixSummary = () => ({
 const withZabbix = (snap) => ({ ...snap, zabbix: zabbixSummary() });
 let lastSnapshot = withZabbix(sim.snapshot());
 
-setInterval(() => {
+// Engine loop. Each tick sends a small "fast" frame (what moves); the full snapshot goes
+// once per second or as soon as a problem / work order changes (see js/sim/frames.js).
+// The JSON is built once per tick and shared by every client.
+let tickN = 0;
+let lastSig = '';
+let nextTick = Date.now() + TICK_MS;
+function tick() {
   sim.advance((TICK_MS / 1000) * sim.speed);
   lastSnapshot = withZabbix(sim.snapshot());
-  const payload = `data: ${JSON.stringify(lastSnapshot)}\n\n`;
-  for (const res of clients) res.write(payload);
-}, TICK_MS);
+  const sig = urgentSignature(lastSnapshot);
+  const full = ++tickN % FULL_EVERY === 0 || sig !== lastSig;
+  lastSig = sig;
+  if (clients.size) {
+    const payload = `data: ${encodeFrame(lastSnapshot, { full })}\n\n`;
+    for (const c of clients) c.write(payload);
+  }
+  // Drift-corrected timer: ticks stay on a 200 ms grid even if one runs late.
+  nextTick += TICK_MS;
+  const now = Date.now();
+  if (nextTick < now - TICK_MS * 5) nextTick = now + TICK_MS;
+  setTimeout(tick, Math.max(0, nextTick - now));
+}
+setTimeout(tick, TICK_MS);
 
 // Keep proxies (Traefik in Dokploy) from closing idle SSE connections.
 setInterval(() => {
-  for (const res of clients) res.write(': ping\n\n');
+  for (const c of clients) c.write(': ping\n\n');
 }, 15000);
+
+// One SSE client; gzip (flushed after every message) when the browser accepts it.
+function openStream(req, res) {
+  const gzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+  const headers = { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' };
+  if (gzip) {
+    headers['Content-Encoding'] = 'gzip';
+    headers.Vary = 'Accept-Encoding';
+  }
+  res.writeHead(200, headers);
+  let out = res;
+  if (gzip) {
+    out = zlib.createGzip({ level: 6 });
+    out.pipe(res);
+    out.on('error', () => {});
+  }
+  const c = {
+    write(s) {
+      out.write(s);
+      if (gzip) out.flush(zlib.constants.Z_SYNC_FLUSH);
+    },
+    close() {
+      if (gzip) out.end();
+    },
+  };
+  c.write(`retry: 2000\ndata: ${encodeFrame(lastSnapshot, { full: true })}\n\n`);
+  clients.add(c);
+  req.on('close', () => {
+    clients.delete(c);
+    c.close();
+  });
+}
 
 // ───────────── HTTP ─────────────
 function json(res, code, body) {
@@ -346,10 +398,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(prometheus());
     }
     if (p === '/api/stream') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-      res.write(`retry: 2000\ndata: ${JSON.stringify(lastSnapshot)}\n\n`);
-      clients.add(res);
-      req.on('close', () => clients.delete(res));
+      openStream(req, res);
       return;
     }
     if (p === '/api/zabbix/status' && req.method === 'GET') return json(res, 200, { ...zabbixSummary(), detail: zbx });

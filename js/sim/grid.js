@@ -3,6 +3,8 @@
 // the world is a grid, agents path over walkable cells, the route is compressed
 // into corner points and the agent then moves along the segments every tick.
 
+import { ROADS } from './layout.js';
+
 export class MinHeap {
   constructor(less) {
     this.a = [];
@@ -206,8 +208,40 @@ function norm(x, z) {
 
 // Lane path for a vehicle: shift the route to the right-hand lane and move into it
 // within the first few metres (instead of drifting diagonally along the whole segment).
+// Moves the inner corners of a road route onto the centre line of the road(s) they lie on,
+// so the lane offset puts traffic in each direction on its own side regardless of which grid
+// column A* happened to choose.
+const LANE_ROADS = ROADS.filter((r) => !r.yard).map((r) => ({ r: r.rect, vertical: r.rect[3] - r.rect[1] > r.rect[2] - r.rect[0] }));
+export function snapToRoads(raw) {
+  if (!raw || raw.length < 3) return raw;
+  const out = [raw[0]];
+  for (let i = 1; i < raw.length - 1; i++) {
+    let { x, z } = raw[i];
+    for (const { r, vertical } of LANE_ROADS) {
+      if (raw[i].x < r[0] || raw[i].x > r[2] || raw[i].z < r[1] || raw[i].z > r[3]) continue;
+      if (vertical) x = (r[0] + r[2]) / 2;
+      else z = (r[1] + r[3]) / 2;
+    }
+    const prev = out[out.length - 1];
+    if (Math.hypot(x - prev.x, z - prev.z) > 0.5) out.push({ x, z });
+  }
+  out.push(raw[raw.length - 1]);
+  // Drop collinear inner points.
+  const res = [out[0]];
+  for (let i = 1; i < out.length - 1; i++) {
+    const a = res[res.length - 1];
+    const b = out[i];
+    const c = out[i + 1];
+    const cross = (b.x - a.x) * (c.z - b.z) - (b.z - a.z) * (c.x - b.x);
+    if (Math.abs(cross) > 1e-6) res.push(b);
+  }
+  res.push(out[out.length - 1]);
+  return res;
+}
+
 export function lanePath(raw, from, off = 1.7) {
   if (!raw || raw.length < 2) return raw;
+  raw = snapToRoads(raw);
   const lane = offsetRight(raw, off);
   const dx = raw[1].x - raw[0].x;
   const dz = raw[1].z - raw[0].z;
