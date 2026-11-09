@@ -1,0 +1,14 @@
+{
+  "name": "zabbix-demo-manufactura",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Planta aceitera 3D (Three.js) con simulación en servidor y métricas para Zabbix",
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.js",
+    "check": "node tools/check-sim.mjs",
+    "zabbix-template": "node tools/gen-zabbix-template.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

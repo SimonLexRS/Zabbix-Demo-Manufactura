@@ -1,0 +1,1121 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 'aec574ac4232429b812cd13070e31732'
+      name: 'Templates/Manufacturing'
+  templates:
+    - uuid: 'b79ac8066193474b95a13cf5b7c861f7'
+      template: 'Planta Aceitera Demo by HTTP'
+      name: 'Planta Aceitera Demo by HTTP'
+      description: 'Monitoreo del gemelo digital de planta aceitera (acopio y molienda de soya). Fuente: https://github.com/SimonLexRS/Zabbix-Demo-Manufactura'
+      groups:
+        - name: 'Templates/Manufacturing'
+      items:
+        - uuid: '17255920ca764dc4a9609e387311bcc4'
+          name: 'Planta: datos crudos (/api/metrics)'
+          type: 'HTTP_AGENT'
+          key: 'planta.raw'
+          delay: '{$PLANTA.INTERVAL}'
+          history: '0'
+          value_type: 'TEXT'
+          trends: '0'
+          url: '{$PLANTA.URL}/api/metrics'
+          timeout: '10s'
+          description: 'Ítem maestro: JSON completo del simulador. El resto de ítems son dependientes.'
+          tags:
+            - tag: 'component'
+              value: 'raw'
+        - uuid: '44cf605440204d2fb4b1e28d8b7b789f'
+          name: 'Planta: reloj de simulación'
+          type: 'DEPENDENT'
+          key: 'planta.sim_minutes'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.sim_minutes'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          units: 'm'
+          tags:
+            - tag: 'component'
+              value: 'general'
+          triggers:
+            - uuid: '9a263bdf753d4a9fb62c5d6587632b37'
+              expression: 'nodata(/Planta Aceitera Demo by HTTP/planta.sim_minutes,5m)=1'
+              name: 'Sin datos de la planta por 5 minutos'
+              priority: 'AVERAGE'
+              description: 'El endpoint /api/metrics no responde o el servidor está detenido.'
+        - uuid: '0e7cc09a14e94a6397eb50ce596e9211'
+          name: 'Planta: velocidad de simulación'
+          type: 'DEPENDENT'
+          key: 'planta.speed'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.speed'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          units: 'x'
+          tags:
+            - tag: 'component'
+              value: 'general'
+        - uuid: 'a3bf2a0f7aa445928f956afbebffd718'
+          name: 'Planta: Stock de soya'
+          type: 'DEPENDENT'
+          key: 'planta.soy_stock_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.soy_stock_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'acopio'
+          units: 't'
+        - uuid: '7ba878f73cf54e22b2ba6e968d81d06e'
+          name: 'Planta: Ocupación de acopio'
+          type: 'DEPENDENT'
+          key: 'planta.soy_stock_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.soy_stock_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'acopio'
+          units: '%'
+        - uuid: '1b78d20116ab40adb9a7c2a50936f435'
+          name: 'Planta: Soya recibida hoy'
+          type: 'DEPENDENT'
+          key: 'planta.soy_received_today_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.soy_received_today_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'recepcion'
+          units: 't'
+        - uuid: '233f310bf559499e83f5856f4601469c'
+          name: 'Planta: Camiones recibidos hoy'
+          type: 'DEPENDENT'
+          key: 'planta.trucks_received_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.trucks_received_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'recepcion'
+        - uuid: '5c20fe84025c49ca8fefc352728cd8f5'
+          name: 'Planta: Camiones rechazados hoy'
+          type: 'DEPENDENT'
+          key: 'planta.trucks_rejected_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.trucks_rejected_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'recepcion'
+        - uuid: '12d0995678a24737b74d9076f76f4762'
+          name: 'Planta: Camiones en planta'
+          type: 'DEPENDENT'
+          key: 'planta.trucks_in_plant'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.trucks_in_plant'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'recepcion'
+        - uuid: 'fad1a0ea7363461e8a20e272a30ac056'
+          name: 'Planta: Camiones en playa'
+          type: 'DEPENDENT'
+          key: 'planta.trucks_waiting_yard'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.trucks_waiting_yard'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'recepcion'
+        - uuid: '49ec2dc65d3440ce9e20fded0c40511f'
+          name: 'Planta: Camiones esperando en RN4'
+          type: 'DEPENDENT'
+          key: 'planta.trucks_waiting_road'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.trucks_waiting_road'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'recepcion'
+          triggers:
+            - uuid: '20d12c3a91584de892f685019d5dad16'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.trucks_waiting_road)>{$PLANTA.ROADQ.MAX}'
+              name: 'Planta: Cola de camiones en RN4 (> {$PLANTA.ROADQ.MAX})'
+              priority: 'WARNING'
+        - uuid: '9f01f2cc4018484db734f4b715b69366'
+          name: 'Planta: Tasa de molienda'
+          type: 'DEPENDENT'
+          key: 'planta.crush_rate_tpd'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.crush_rate_tpd'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'produccion'
+          units: 't/d'
+        - uuid: '631bf567a8cd449990b74d54d370c8a9'
+          name: 'Planta: Capacidad de molienda utilizada'
+          type: 'DEPENDENT'
+          key: 'planta.crush_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.crush_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'produccion'
+          units: '%'
+          triggers:
+            - uuid: '7927243937c3413d9b01048a0448d6ba'
+              expression: 'max(/Planta Aceitera Demo by HTTP/planta.crush_pct,5m)<{$PLANTA.CRUSH.MIN}'
+              name: 'Planta: Molienda bajo {$PLANTA.CRUSH.MIN}% de capacidad por 5 min'
+              priority: 'AVERAGE'
+        - uuid: '3a3cdfb67a674fc6858035c311127251'
+          name: 'Planta: Soya molida hoy'
+          type: 'DEPENDENT'
+          key: 'planta.crushed_today_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.crushed_today_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'produccion'
+          units: 't'
+        - uuid: '27eae936c22a48ea8ee308f94cd2ba32'
+          name: 'Planta: Silo pulmón'
+          type: 'DEPENDENT'
+          key: 'planta.buffer_silo_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.buffer_silo_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'produccion'
+          units: 't'
+        - uuid: '79a28fdffb5c412e9cbbe52e9f33af5d'
+          name: 'Planta: Temp. acondicionador'
+          type: 'DEPENDENT'
+          key: 'planta.prep_conditioner_temp_c'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.prep_conditioner_temp_c'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'produccion'
+          units: '°C'
+        - uuid: '27008a17a2b846d8abbd5a7b93df47e4'
+          name: 'Planta: Temp. extractor'
+          type: 'DEPENDENT'
+          key: 'planta.extractor_temp_c'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.extractor_temp_c'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'extraccion'
+          units: '°C'
+        - uuid: '0a7270be5b134f6382c720d8eeb81d2c'
+          name: 'Planta: Temp. desolventizador-tostador'
+          type: 'DEPENDENT'
+          key: 'planta.dt_temp_c'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.dt_temp_c'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'extraccion'
+          units: '°C'
+        - uuid: '7006607de552496e86db347cf21fee14'
+          name: 'Planta: Concentración de miscela'
+          type: 'DEPENDENT'
+          key: 'planta.miscella_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.miscella_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'extraccion'
+          units: '%'
+        - uuid: '5af4ef72077a4dc4902a7727ea4a58e3'
+          name: 'Planta: LEL hexano en extracción'
+          type: 'DEPENDENT'
+          key: 'planta.lel_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.lel_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'seguridad'
+          units: '%'
+          triggers:
+            - uuid: 'af302a370ee245b4ab8aec979b86a8d3'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.lel_pct)>{$PLANTA.LEL.MAX}'
+              name: 'Planta: LEL de hexano sobre {$PLANTA.LEL.MAX}% en extracción'
+              priority: 'DISASTER'
+            - uuid: '27361cc8e4a942e5ab655d2bd672d771'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.lel_pct)>{$PLANTA.LEL.WARN}'
+              name: 'Planta: LEL de hexano elevado (> {$PLANTA.LEL.WARN}%)'
+              priority: 'WARNING'
+        - uuid: '3ce9860add9944e4aebed4c8ad3237b8'
+          name: 'Planta: Extractor en marcha'
+          type: 'DEPENDENT'
+          key: 'planta.extractor_running'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.extractor_running'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'extraccion'
+          valuemap:
+            name: 'Estado de equipo'
+          triggers:
+            - uuid: '5470ad0ebffa48b5b89c86f6c14d5527'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.extractor_running)=0'
+              name: 'Planta: Extractor detenido'
+              priority: 'HIGH'
+        - uuid: '5bbd5c999dc6428388dbae87b042504f'
+          name: 'Planta: Stock de hexano'
+          type: 'DEPENDENT'
+          key: 'planta.hexane_stock_m3'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.hexane_stock_m3'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'extraccion'
+          units: 'm³'
+        - uuid: 'bf3c923f2ecf478cb83a04706ff65696'
+          name: 'Planta: Nivel tanque de hexano'
+          type: 'DEPENDENT'
+          key: 'planta.hexane_stock_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.hexane_stock_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'extraccion'
+          units: '%'
+          triggers:
+            - uuid: '00947551a1c34b818ebf864f9ba60421'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.hexane_stock_pct)<{$PLANTA.HEXANE.MIN}'
+              name: 'Planta: Stock de hexano bajo (< {$PLANTA.HEXANE.MIN}%)'
+              priority: 'WARNING'
+        - uuid: '21bc864a3ed245cea23330ecda8a5925'
+          name: 'Planta: Pérdida de hexano'
+          type: 'DEPENDENT'
+          key: 'planta.hexane_loss_l_per_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.hexane_loss_l_per_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'extraccion'
+          units: 'L/t'
+        - uuid: '5f4686660859418282d3fb1a84575c09'
+          name: 'Planta: Stock de aceite crudo'
+          type: 'DEPENDENT'
+          key: 'planta.oil_stock_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.oil_stock_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+          units: 't'
+        - uuid: 'dd1f316ff4e94de7a52118374887bc41'
+          name: 'Planta: Ocupación tanques de aceite'
+          type: 'DEPENDENT'
+          key: 'planta.oil_stock_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.oil_stock_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+          units: '%'
+          triggers:
+            - uuid: '51fb34cc093645f6ba1964614650aa50'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.oil_stock_pct)>{$PLANTA.OIL.MAX}'
+              name: 'Planta: Tanques de aceite sobre {$PLANTA.OIL.MAX}%'
+              priority: 'WARNING'
+        - uuid: 'a2e82f1a7e5c48a48be30961b2448475'
+          name: 'Planta: Aceite producido hoy'
+          type: 'DEPENDENT'
+          key: 'planta.oil_produced_today_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.oil_produced_today_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'produccion'
+          units: 't'
+        - uuid: '2a43661113e74af4b7e0b44884a4aeaa'
+          name: 'Planta: Aceite despachado hoy'
+          type: 'DEPENDENT'
+          key: 'planta.oil_dispatched_today_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.oil_dispatched_today_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+          units: 't'
+        - uuid: '55cbbb1c8f8946579b861c3fb2090826'
+          name: 'Planta: Stock de harina'
+          type: 'DEPENDENT'
+          key: 'planta.meal_stock_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_stock_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+          units: 't'
+        - uuid: 'c613985b5f8c44fc9c3fe2b2cb88ddd7'
+          name: 'Planta: Ocupación galpón de harina'
+          type: 'DEPENDENT'
+          key: 'planta.meal_stock_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_stock_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+          units: '%'
+        - uuid: '9ce61f391c5e4df8baa57ea29dad98e2'
+          name: 'Planta: Harina producida hoy'
+          type: 'DEPENDENT'
+          key: 'planta.meal_produced_today_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_produced_today_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'produccion'
+          units: 't'
+        - uuid: '8dfee5cfca3f4b7c8d32729e67f5176c'
+          name: 'Planta: Harina despachada hoy'
+          type: 'DEPENDENT'
+          key: 'planta.meal_dispatched_today_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_dispatched_today_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+          units: 't'
+        - uuid: 'd10fd4465cbf409c8114feaf375cd74e'
+          name: 'Planta: Proteína en harina'
+          type: 'DEPENDENT'
+          key: 'planta.meal_protein_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_protein_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'calidad'
+          units: '%'
+        - uuid: '3dd42bad64ca4b018ae9596499397ee6'
+          name: 'Planta: Humedad de harina'
+          type: 'DEPENDENT'
+          key: 'planta.meal_humidity_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_humidity_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'calidad'
+          units: '%'
+        - uuid: 'c591a90884c44918be6b1a7e23b52d26'
+          name: 'Planta: Aceite residual en harina'
+          type: 'DEPENDENT'
+          key: 'planta.meal_residual_oil_pct'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_residual_oil_pct'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'calidad'
+          units: '%'
+        - uuid: 'b63abbff545d4c8081a3342d45c71db8'
+          name: 'Planta: Hexano residual en harina'
+          type: 'DEPENDENT'
+          key: 'planta.meal_residual_hexane_ppm'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_residual_hexane_ppm'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'calidad'
+          units: 'ppm'
+          triggers:
+            - uuid: 'f00f439dfa26433a9329004298668a45'
+              expression: 'min(/Planta Aceitera Demo by HTTP/planta.meal_residual_hexane_ppm,5m)>{$PLANTA.MEAL.HEXANE.MAX}'
+              name: 'Planta: Hexano residual en harina > {$PLANTA.MEAL.HEXANE.MAX} ppm'
+              priority: 'AVERAGE'
+        - uuid: 'ed25c4bed9e34c25897a001b5f407b30'
+          name: 'Planta: Stock de cascarilla'
+          type: 'DEPENDENT'
+          key: 'planta.hulls_stock_t'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.hulls_stock_t'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'energia'
+          units: 't'
+        - uuid: '814ceb2c7a8f44bf97c5c3c3e6ae4e15'
+          name: 'Planta: Presión de vapor'
+          type: 'DEPENDENT'
+          key: 'planta.steam_pressure_bar'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.steam_pressure_bar'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'energia'
+          units: 'bar'
+          triggers:
+            - uuid: '97ea32ee700b4fecbdb4e1ce9ee0c867'
+              expression: 'max(/Planta Aceitera Demo by HTTP/planta.steam_pressure_bar,2m)<{$PLANTA.STEAM.MIN}'
+              name: 'Planta: Presión de vapor baja (< {$PLANTA.STEAM.MIN} bar)'
+              priority: 'HIGH'
+        - uuid: 'e177a7469807413b8020f5d00fb7ae79'
+          name: 'Planta: Demanda de vapor'
+          type: 'DEPENDENT'
+          key: 'planta.steam_demand_tph'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.steam_demand_tph'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'energia'
+          units: 't/h'
+        - uuid: '6cd04e1d26c544b99a97046e26f4a7e5'
+          name: 'Planta: Potencia eléctrica'
+          type: 'DEPENDENT'
+          key: 'planta.power_mw'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.power_mw'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'energia'
+          units: 'MW'
+        - uuid: 'b36f5968e0454756a6f7d8bff60d2fb7'
+          name: 'Planta: Cisternas despachadas hoy'
+          type: 'DEPENDENT'
+          key: 'planta.tankers_dispatched_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.tankers_dispatched_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+        - uuid: '87ef89d3d6e1469eac886905ebdd60aa'
+          name: 'Planta: Camiones de harina despachados hoy'
+          type: 'DEPENDENT'
+          key: 'planta.meal_trucks_dispatched_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.meal_trucks_dispatched_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'despacho'
+        - uuid: 'd52f36c0ca214da6b7a72cf6e617c109'
+          name: 'Planta: Problemas activos (simulador)'
+          type: 'DEPENDENT'
+          key: 'planta.problems_active'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.problems_active'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'general'
+      discovery_rules:
+        - uuid: '8f50ed1850df43e9ad55773d52a61e48'
+          name: 'Silos y galpones graneleros'
+          type: 'DEPENDENT'
+          key: 'planta.silos.discovery'
+          delay: '0'
+          item_prototypes:
+            - uuid: 'f3f44abaecbb4d70adadbe7456841385'
+              name: '{#NAME}: Nivel'
+              type: 'DEPENDENT'
+              key: 'planta.silo.level_pct[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.silos[''{#ID}''].level_pct'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'silos'
+                - tag: 'silo'
+                  value: '{#ID}'
+              units: '%'
+              trigger_prototypes:
+                - uuid: 'e0da4b22f88d4bf9b48a4244086cc3c7'
+                  expression: 'last(/Planta Aceitera Demo by HTTP/planta.silo.level_pct[{#ID}])>{$PLANTA.SILO.LEVEL.MAX}'
+                  name: '{#NAME}: casi lleno (> {$PLANTA.SILO.LEVEL.MAX}%)'
+                  priority: 'WARNING'
+            - uuid: '7cbc4c0ca28942f79c16939cea944fd9'
+              name: '{#NAME}: Stock'
+              type: 'DEPENDENT'
+              key: 'planta.silo.stock_t[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.silos[''{#ID}''].stock_t'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'silos'
+                - tag: 'silo'
+                  value: '{#ID}'
+              units: 't'
+            - uuid: '6fa602aba9b44fb89de72f0983b23d3f'
+              name: '{#NAME}: Capacidad'
+              type: 'DEPENDENT'
+              key: 'planta.silo.capacity_t[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.silos[''{#ID}''].capacity_t'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'silos'
+                - tag: 'silo'
+                  value: '{#ID}'
+              units: 't'
+            - uuid: 'dd1d7cc783b44b4a8d0c9a568c966c14'
+              name: '{#NAME}: Temperatura de grano'
+              type: 'DEPENDENT'
+              key: 'planta.silo.temp_c[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.silos[''{#ID}''].temp_c'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'silos'
+                - tag: 'silo'
+                  value: '{#ID}'
+              units: '°C'
+              trigger_prototypes:
+                - uuid: '93b0a7405cc5410786bec9163031341c'
+                  expression: 'last(/Planta Aceitera Demo by HTTP/planta.silo.temp_c[{#ID}])>{$PLANTA.SILO.TEMP.MAX}'
+                  name: '{#NAME}: punto caliente (> {$PLANTA.SILO.TEMP.MAX} °C)'
+                  priority: 'HIGH'
+            - uuid: 'a0a763526d5045609e91e579fa8d9b44'
+              name: '{#NAME}: Humedad de grano'
+              type: 'DEPENDENT'
+              key: 'planta.silo.humidity_pct[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.silos[''{#ID}''].humidity_pct'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'silos'
+                - tag: 'silo'
+                  value: '{#ID}'
+              units: '%'
+          master_item:
+            key: 'planta.raw'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.discovery.silos'
+        - uuid: 'd34eac0add61486c8f50348768d91267'
+          name: 'Tanques de aceite crudo'
+          type: 'DEPENDENT'
+          key: 'planta.tanks.discovery'
+          delay: '0'
+          item_prototypes:
+            - uuid: '64379d2dc7864565b07d585f1dc8fceb'
+              name: '{#NAME}: Nivel'
+              type: 'DEPENDENT'
+              key: 'planta.tank.level_pct[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.tanks[''{#ID}''].level_pct'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'tanks'
+                - tag: 'tank'
+                  value: '{#ID}'
+              units: '%'
+              trigger_prototypes:
+                - uuid: '2468e939a1544ff384d7869a9ae1f3de'
+                  expression: 'last(/Planta Aceitera Demo by HTTP/planta.tank.level_pct[{#ID}])>{$PLANTA.TANK.LEVEL.MAX}'
+                  name: '{#NAME}: nivel alto (> {$PLANTA.TANK.LEVEL.MAX}%)'
+                  priority: 'WARNING'
+            - uuid: '046f52d26c44481ea3b7a5c2d2d7b8f6'
+              name: '{#NAME}: Stock'
+              type: 'DEPENDENT'
+              key: 'planta.tank.stock_t[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.tanks[''{#ID}''].stock_t'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'tanks'
+                - tag: 'tank'
+                  value: '{#ID}'
+              units: 't'
+            - uuid: '214051dadc3946269c69adbdf9f5a7fe'
+              name: '{#NAME}: Temperatura'
+              type: 'DEPENDENT'
+              key: 'planta.tank.temp_c[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.tanks[''{#ID}''].temp_c'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'tanks'
+                - tag: 'tank'
+                  value: '{#ID}'
+              units: '°C'
+          master_item:
+            key: 'planta.raw'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.discovery.tanks'
+        - uuid: '273e692055a644b2961eaafa010d465b'
+          name: 'Calderas'
+          type: 'DEPENDENT'
+          key: 'planta.boilers.discovery'
+          delay: '0'
+          item_prototypes:
+            - uuid: 'e9f4b837935e4f4a910816fde84cde22'
+              name: '{#NAME}: Estado'
+              type: 'DEPENDENT'
+              key: 'planta.boiler.status[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.boilers[''{#ID}''].status'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'UNSIGNED'
+              tags:
+                - tag: 'component'
+                  value: 'boilers'
+                - tag: 'boiler'
+                  value: '{#ID}'
+              valuemap:
+                name: 'Estado de equipo'
+              trigger_prototypes:
+                - uuid: 'aa765a594c514979922a1efbac4fc2fe'
+                  expression: 'last(/Planta Aceitera Demo by HTTP/planta.boiler.status[{#ID}])=0'
+                  name: '{#NAME}: fuera de servicio'
+                  priority: 'AVERAGE'
+            - uuid: '5396796903a14b02b7cbb20e50fce760'
+              name: '{#NAME}: Carga'
+              type: 'DEPENDENT'
+              key: 'planta.boiler.load_pct[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.boilers[''{#ID}''].load_pct'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'boilers'
+                - tag: 'boiler'
+                  value: '{#ID}'
+              units: '%'
+            - uuid: 'ca896daab60b41d486ca9b4c2e4649cc'
+              name: '{#NAME}: Temp. gases de chimenea'
+              type: 'DEPENDENT'
+              key: 'planta.boiler.flue_temp_c[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.boilers[''{#ID}''].flue_temp_c'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'boilers'
+                - tag: 'boiler'
+                  value: '{#ID}'
+              units: '°C'
+          master_item:
+            key: 'planta.raw'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.discovery.boilers'
+        - uuid: 'ba826d326dcc4b869b04a76cdb387816'
+          name: 'Puntos de operación (balanzas, calador, volcadoras, carga)'
+          type: 'DEPENDENT'
+          key: 'planta.stations.discovery'
+          delay: '0'
+          item_prototypes:
+            - uuid: '867ef617fddf42e7a4adb27ba16ae5d6'
+              name: '{#NAME}: Disponible'
+              type: 'DEPENDENT'
+              key: 'planta.station.available[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.stations[''{#ID}''].available'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'UNSIGNED'
+              tags:
+                - tag: 'component'
+                  value: 'stations'
+                - tag: 'station'
+                  value: '{#ID}'
+              valuemap:
+                name: 'Estado de equipo'
+              trigger_prototypes:
+                - uuid: 'c308fa927e9f44d5854bfa13bede223b'
+                  expression: 'max(/Planta Aceitera Demo by HTTP/planta.station.available[{#ID}],2m)=0'
+                  name: '{#NAME}: fuera de servicio'
+                  priority: 'AVERAGE'
+            - uuid: '140e36b2b75e4c55be07afcb2667c2c3'
+              name: '{#NAME}: Camiones en uso'
+              type: 'DEPENDENT'
+              key: 'planta.station.busy[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.stations[''{#ID}''].busy'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'UNSIGNED'
+              tags:
+                - tag: 'component'
+                  value: 'stations'
+                - tag: 'station'
+                  value: '{#ID}'
+            - uuid: 'ecf56f879e574db4ab81c16fb6effe2e'
+              name: '{#NAME}: Operaciones hoy'
+              type: 'DEPENDENT'
+              key: 'planta.station.operations_today[{#ID}]'
+              delay: '0'
+              preprocessing:
+                - type: 'JSONPATH'
+                  parameters:
+                    - '$.stations[''{#ID}''].operations_today'
+              master_item:
+                key: 'planta.raw'
+              value_type: 'UNSIGNED'
+              tags:
+                - tag: 'component'
+                  value: 'stations'
+                - tag: 'station'
+                  value: '{#ID}'
+          master_item:
+            key: 'planta.raw'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.discovery.stations'
+      tags:
+        - tag: 'class'
+          value: 'manufacturing'
+        - tag: 'target'
+          value: 'planta-aceitera'
+      macros:
+        - macro: '{$PLANTA.URL}'
+          value: 'http://planta-aceitera:8080'
+          description: 'URL base del simulador (sin barra final).'
+        - macro: '{$PLANTA.INTERVAL}'
+          value: '30s'
+          description: 'Intervalo de consulta del ítem maestro.'
+        - macro: '{$PLANTA.STEAM.MIN}'
+          value: '8'
+          description: 'Presión mínima de vapor (bar).'
+        - macro: '{$PLANTA.LEL.MAX}'
+          value: '25'
+          description: 'LEL de hexano: umbral de desastre (%).'
+        - macro: '{$PLANTA.LEL.WARN}'
+          value: '12'
+          description: 'LEL de hexano: umbral de advertencia (%).'
+        - macro: '{$PLANTA.CRUSH.MIN}'
+          value: '70'
+          description: 'Capacidad de molienda mínima (%).'
+        - macro: '{$PLANTA.HEXANE.MIN}'
+          value: '25'
+          description: 'Nivel mínimo de tanque de hexano (%).'
+        - macro: '{$PLANTA.MEAL.HEXANE.MAX}'
+          value: '300'
+          description: 'Hexano residual máximo en harina (ppm).'
+        - macro: '{$PLANTA.OIL.MAX}'
+          value: '90'
+          description: 'Ocupación máxima de tanques de aceite (%).'
+        - macro: '{$PLANTA.ROADQ.MAX}'
+          value: '4'
+          description: 'Camiones máximos esperando en RN4.'
+        - macro: '{$PLANTA.SILO.LEVEL.MAX}'
+          value: '95'
+          description: 'Nivel máximo de silo/galpón (%).'
+        - macro: '{$PLANTA.SILO.TEMP.MAX}'
+          value: '32'
+          description: 'Temperatura máxima de grano (°C).'
+        - macro: '{$PLANTA.TANK.LEVEL.MAX}'
+          value: '95'
+          description: 'Nivel máximo de tanque de aceite (%).'
+      valuemaps:
+        - uuid: '7855db19962c4751aa5abd63d5449e50'
+          name: 'Estado de equipo'
+          mappings:
+            - value: '0'
+              newvalue: 'Detenido / fuera de servicio'
+            - value: '1'
+              newvalue: 'En servicio'

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Planta Aceitera 3D · Demo Zabbix</title>
+    <meta name="description" content="Gemelo digital 3D de una planta de acopio y molienda de soya (Three.js) con simulación en vivo y métricas para Zabbix." />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./js/vendor/three/three.module.js",
+          "three/addons/": "./js/vendor/three/addons/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="scene"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c5 6 8 10.5 8 15a8 8 0 1 1-16 0c0-4.5 3-9 8-15z" fill="#f2b632"/><path d="M12.5 19.5a4 4 0 0 0 4 3.5" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <div>
+          <h1>Planta Aceitera · Acopio y Molienda</h1>
+          <p><span id="clock">—</span> · <span id="mode" class="mode">Conectando…</span></p>
+        </div>
+      </div>
+    </header>
+
+    <section id="kpis" class="kpis" aria-label="Indicadores de planta"></section>
+
+    <aside id="feed" class="panel feed">
+      <div class="feed-head">
+        <div class="feed-tabs" role="tablist">
+          <button class="active" data-tab="problems">Problemas <span id="probCount" class="count">0</span></button>
+          <button data-tab="events">Eventos</button>
+        </div>
+        <button id="feedToggle" class="icon" title="Mostrar/ocultar">▾</button>
+      </div>
+      <div id="feedList" class="feed-list"></div>
+    </aside>
+
+    <aside id="details" class="panel details hidden" aria-live="polite">
+      <div class="details-head">
+        <div>
+          <span id="detailsKind" class="eyebrow"></span>
+          <h2 id="detailsTitle"></h2>
+          <p id="detailsSub"></p>
+        </div>
+        <button id="detailsClose" class="icon" title="Cerrar">✕</button>
+      </div>
+      <span id="detailsStatus" class="status"></span>
+      <div class="chart-wrap hidden">
+        <span id="chartLabel"></span>
+        <canvas id="detailsChart"></canvas>
+      </div>
+      <table class="metrics">
+        <thead><tr><th>Métrica</th><th>Valor</th><th>Ítem Zabbix</th></tr></thead>
+        <tbody id="detailsRows"></tbody>
+      </table>
+      <div id="detailsActions" class="actions"></div>
+    </aside>
+
+    <nav class="controls" aria-label="Controles">
+      <div id="speeds" class="seg" title="Velocidad de simulación"></div>
+      <div class="menu">
+        <button data-menu="tourList">Recorrido del proceso</button>
+        <div id="tourList" class="menu-pop"></div>
+      </div>
+      <div class="menu">
+        <button data-menu="faultList" class="danger">Simular falla</button>
+        <div id="faultList" class="menu-pop"></div>
+      </div>
+      <button id="btnLabels" class="active" title="Etiquetas">Etiquetas</button>
+      <button id="btnHome" title="Vista general">Vista general</button>
+    </nav>
+
+    <div class="hint">Arrastra para rotar · clic derecho para desplazar · rueda para zoom · clic en un equipo, camión u operario</div>
+    <div id="toast" class="toast"></div>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>
