@@ -64,7 +64,7 @@ const SAY = {
   complain: ['¿Cuánto falta con {x}? Necesito la planta operando.', '¡Seguimos parados por {x}! ¿Qué ETA tenemos?', 'Esto ya lleva {m} min, ¿qué pasa con {x}?'],
   escalate: ['Esto no puede seguir: {m} min con {x}. Quiero un informe ya.', 'Estamos perdiendo producción por {x}. ¡Prioridad máxima!', 'Llamen al proveedor si hace falta, {x} tiene que quedar hoy.'],
   tech: ['En camino a {x}.', 'Llegué, empiezo a trabajar en {x}.', 'Diagnosticando {x}…'],
-  done: ['Listo, {x} quedó operativo.', 'Reparado. Pueden normalizar {x}.'],
+  done: ['Listo, terminé con {x}.', 'Trabajo terminado en {x}. Pueden normalizar.'],
   thanks: ['Bien hecho, volvemos a operar.', 'Gracias equipo. Registren la causa en la OT.'],
   unassigned: ['¡No hay técnico libre para {x}! Llamen al de guardia.', 'Todos ocupados, {x} queda en cola.'],
   nearMiss: ['¡Casi accidente! Bajen la velocidad en las vías internas.', '¡Cuidado con los peatones! Esto va al reporte de seguridad.'],

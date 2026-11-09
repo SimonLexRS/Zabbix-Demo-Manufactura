@@ -159,6 +159,8 @@ En el panel de detalle del cliente 3D cada métrica muestra su **clave de ítem 
 
 Para regenerar los templates después de cambiar métricas: `node tools/gen-zabbix-template.mjs`.
 
+**Dashboard en Zabbix**: `ZABBIX_URL=https://tu-zabbix ZABBIX_API_TOKEN=... node tools/create-zabbix-dashboard.mjs` crea (o actualiza) el dashboard *Planta Aceitera · Estado y CEP* con dos páginas: **Estado de planta** (KPIs con umbrales, medidores de vapor/molienda/LEL, problemas activos, tendencias de molienda y vapor, niveles de silos, stocks, tránsito y mantenimiento) y **CEP y correlación** (reglas activas, último evento compuesto, eventos CEP, causas raíz, síntomas, problemas por severidad, reglas CEP en el tiempo, órdenes de trabajo y tránsito).
+
 ## Estructura
 
 ```
