@@ -16,7 +16,7 @@ export const LEGACY_CORRELATION = 'Planta Aceitera: la causa raíz cierra los s�
 const WIN = { none: 0, cause: 2, pattern: 4 };
 const C = { tagName: 25, tagValue: 26, hostGroup: 37, opened: 30, first: 31, symptom: 33, cloned: 34 };
 const OP = { equals: 0, notEquals: 1, contains: 2, isTrue: 10, isFalse: 11 };
-const WHEN = { occurred: 0, added: 1, matched: 4 };
+const WHEN = { occurred: 0, added: 1, matched: 4, closed: 5 };
 const SCOPE = { current: 0, all: 2 };
 const T = { setName: 1, close: 2, discard: 3, setSeverity: 4, addTag: 11, setTag: 12, closeWindow: 18 };
 
@@ -106,10 +106,14 @@ export function buildRules({ groups }) {
     },
     {
       name: `${PREFIX}Causa y síntomas por área`,
-      description: 'Ventana causa/síntomas de 45 min por área: la primera falla del área es la causa y lo que aparece después en esa área son sus síntomas (tag "sintomas" con la cantidad). Si la ventana la abre un síntoma, se cierra para esperar una causa real.',
+      description: 'Ventana causa/síntomas de 45 min por área: la primera falla del área es la causa y lo que aparece después en esa área son sus síntomas (tag "sintomas" con la cantidad). Si la ventana la abre un síntoma, se cierra para esperar una causa real; cuando la causa se resuelve, la ventana se cierra y la próxima falla del área abre otra.',
       sortorder: 3, stop: 0, window_type: WIN.cause, window: window({ duration: '45m', group_by_host: 1, group_by_tags: 1, tags: ['area'], event_count_tag: 'sintomas' }),
       filter: plantFilter(groups, [{ type: C.tagName, tag: 'rol' }, tagIs('problema', 'casi_accidente', OP.notEquals)]),
-      operations: [op({ sortorder: 1, when: WHEN.added, type: T.closeWindow, filter: filter([flag(C.first, true), tagIs('rol', 'sintoma')]) })],
+      operations: [
+        op({ sortorder: 1, when: WHEN.added, type: T.closeWindow, filter: filter([flag(C.first, true), tagIs('rol', 'sintoma')]) }),
+        // When the cause recovers the episode is over: a later fault in the area starts its own window.
+        op({ sortorder: 2, when: WHEN.closed, type: T.closeWindow, filter: filter([flag(C.first, true)]) }),
+      ],
     },
     {
       name: `${PREFIX}Incidente de seguridad en extracción`,
