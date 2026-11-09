@@ -101,7 +101,7 @@ Los síntomas ya **no dependen** de su causa: antes las dependencias impedían q
 | Regla | Ventana | Efecto |
 |---|---|---|
 | Enriquecer: responsable por área | sin ventana | tag `responsable` (Jefe de producción, HSE, Mantenimiento, TI) según el área |
-| Casi accidentes repetidos | causa/síntomas 15 min | se queda con el primero, **descarta** los repetidos y los cuenta en `repeticiones` |
+| Casi accidentes repetidos | causa/síntomas 15 min | se queda con el primero, **cierra** los repetidos apenas entran en la ventana y los cuenta en `repeticiones` |
 | Causa y síntomas por área | causa/síntomas 45 min, por `area` | la primera falla del área es la **causa**; lo que aparece después en esa área son sus **síntomas** (tag `sintomas`). Si la ventana la abre un síntoma, se cierra |
 | Incidente de seguridad en extracción | patrón 15 min | fuga de hexano con LEL > 25 % o evacuación → la fuga pasa a "INCIDENTE: …" con severidad Desastre |
 | Bloqueo vial interno | patrón 20 min | colisión con tránsito detenido o cola en RN4 → "INCIDENTE: bloqueo vial interno" con severidad Desastre |

@@ -18,7 +18,7 @@ const C = { tagName: 25, tagValue: 26, hostGroup: 37, opened: 30, first: 31, sym
 const OP = { equals: 0, notEquals: 1, contains: 2, isTrue: 10, isFalse: 11 };
 const WHEN = { occurred: 0, added: 1, matched: 4 };
 const SCOPE = { current: 0, all: 2 };
-const T = { setName: 1, discard: 3, setSeverity: 4, addTag: 11, setTag: 12, closeWindow: 18 };
+const T = { setName: 1, close: 2, discard: 3, setSeverity: 4, addTag: 11, setTag: 12, closeWindow: 18 };
 
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
@@ -72,6 +72,9 @@ function incidentOps({ name, severity, tag, causeFilter }) {
   if (name) ops.push(op({ sortorder: n++, when: WHEN.matched, scope: SCOPE.all, type: T.setName, scopeFilter, fields: { event_name: name } }));
   ops.push(op({ sortorder: n++, when: WHEN.matched, scope: SCOPE.all, type: T.setSeverity, scopeFilter, fields: { severity } }));
   ops.push(op({ sortorder: n++, when: WHEN.matched, scope: SCOPE.all, type: T.setTag, scopeFilter, fields: { tag: 'incidente', tag_value: tag } }));
+  // The pattern is examined every second: once the incident is marked, close the window so
+  // the operations do not repeat (each repetition would add an entry to the event history).
+  ops.push(op({ sortorder: n++, when: WHEN.matched, scope: SCOPE.all, type: T.closeWindow }));
   return ops;
 }
 
@@ -94,10 +97,12 @@ export function buildRules({ groups }) {
     },
     {
       name: `${PREFIX}Casi accidentes repetidos`,
-      description: 'Ventana causa/síntomas de 15 min: se queda con el primer casi accidente y descarta los repetidos; el tag "repeticiones" cuenta cuántos hubo.',
+      description: 'Ventana causa/síntomas de 15 min: se queda con el primer casi accidente y cierra los repetidos apenas entran en la ventana; el tag "repeticiones" cuenta cuántos hubo.',
       sortorder: 2, stop: 1, window_type: WIN.cause, window: window({ duration: '15m', group_by_host: 1, event_count_tag: 'repeticiones' }),
       filter: plantFilter(groups, [tagIs('problema', 'casi_accidente')]),
-      operations: [op({ sortorder: 1, when: WHEN.occurred, type: T.discard, filter: filter([flag(C.symptom, true)]) })],
+      // "Event occurred" runs before the event joins the window (it is not a symptom yet), so
+      // the repeat is closed when it is added instead.
+      operations: [op({ sortorder: 1, when: WHEN.added, type: T.close, filter: filter([flag(C.symptom, true)]) })],
     },
     {
       name: `${PREFIX}Causa y síntomas por área`,
