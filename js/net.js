@@ -95,11 +95,12 @@ export class SnapshotBuffer {
 export async function connect({ onSnapshot, onMode, askToken }) {
   let control = async () => ({ ok: false });
   let problems = async () => ({ ok: false });
+  let presence = async () => {};
 
   const startLocal = async (reason) => {
     const { Simulation } = await import('./sim/simulation.js');
     const { FAST_KEYS, urgentSignature } = await import('./sim/frames.js');
-    const sim = new Simulation({ randomFaults: true });
+    const sim = new Simulation({ randomFaults: false });
     let n = 0;
     let sig = '';
     setInterval(() => {
@@ -111,6 +112,12 @@ export async function connect({ onSnapshot, onMode, askToken }) {
       sig = s2;
     }, TICK_MS);
     control = async (cmd) => ({ ok: sim.control(cmd), speed: sim.speed });
+    let seen = 0;
+    presence = async () => {
+      seen = performance.now();
+      sim.monitorPresence = true;
+    };
+    setInterval(() => (sim.monitorPresence = performance.now() - seen < 25000), 1000);
     problems = async (cmd) => {
       let ok = true;
       if (cmd.clearAll) sim.clearFaults();
@@ -188,9 +195,11 @@ export async function connect({ onSnapshot, onMode, askToken }) {
       return { ok: false, error: 'Clave incorrecta.' };
     };
     control = (cmd) => api('POST', 'api/control', cmd);
+    // Someone is in the monitoring room (no admin key needed: it only calls the manager).
+    presence = () => fetch('api/presence', { method: 'POST' }).catch(() => {});
     problems = (cmd) => api('POST', 'api/problems', cmd);
   } else {
     await startLocal('sin servidor');
   }
-  return { live, control: (cmd) => control(cmd), problems: (cmd) => problems(cmd), api: (m, u, b) => api(m, u, b) };
+  return { live, control: (cmd) => control(cmd), problems: (cmd) => problems(cmd), presence: () => presence(), api: (m, u, b) => api(m, u, b) };
 }

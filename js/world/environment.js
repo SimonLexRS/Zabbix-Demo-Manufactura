@@ -1,7 +1,7 @@
-// Ground, roads, river, trees, highway traffic, sky and day/night lighting.
+// Ground, roads, river, trees, sky and day/night lighting.
 import * as THREE from 'three';
 import { ROADS, SITE } from '../sim/layout.js';
-import { mesh, car, box, setMaterials } from './builders.js';
+import { mesh, box, setMaterials } from './builders.js';
 
 export function createEnvironment(scene, M) {
   setMaterials(M);
@@ -126,18 +126,7 @@ export function createEnvironment(scene, M) {
   });
   scene.add(trunks, crowns);
 
-  // Highway traffic (decorative, client-side only).
-  const cars = [];
-  const colors = [0xffffff, 0x1f1f1f, 0xb91c1c, 0x1d4ed8, 0x9ca3af, 0x065f46, 0xf59e0b];
-  for (let i = 0; i < 14; i++) {
-    const north = i % 2 === 0;
-    const c = car(colors[i % colors.length]);
-    c.position.set(north ? 78 : 70, 0, rnd(-180, 180));
-    c.rotation.y = north ? Math.PI / 2 : -Math.PI / 2;
-    c.userData.v = rnd(18, 26) * (north ? -1 : 1);
-    scene.add(c);
-    cars.push(c);
-  }
+  // Highway traffic is part of the simulation now (cars on RN4 brake behind the trucks).
 
   // Sky + lights.
   const hemi = new THREE.HemisphereLight(0xdcecff, 0x55663f, 0.9);
@@ -179,12 +168,6 @@ export function createEnvironment(scene, M) {
       scene.background.lerp(target, Math.min(1, dt * 0.8));
       scene.fog.color.copy(scene.background);
       sun.color.setHex(twilight ? 0xffc48a : night ? 0x8aa6ff : 0xfff3dd);
-      // Traffic.
-      for (const c of cars) {
-        c.position.z += c.userData.v * dt;
-        if (c.position.z < -185) c.position.z = 185;
-        if (c.position.z > 185) c.position.z = -185;
-      }
       waterT += dt;
       water.material.color.setHSL(0.54, 0.38, 0.45 + Math.sin(waterT * 0.7) * 0.02);
     },

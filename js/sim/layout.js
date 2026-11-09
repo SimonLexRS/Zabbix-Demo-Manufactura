@@ -86,7 +86,7 @@ export const BOILERS = [
 
 // Buildings & equipment rendered by the client. `block` = pedestrians walk around it.
 export const BUILDINGS = [
-  { id: 'OFI', type: 'building', name: 'Oficinas administración', x: 26, z: -112, w: 12, d: 16, h: 7, roof: 'red', block: true },
+  { id: 'OFI', type: 'controlRoom', name: 'Oficinas y sala de monitoreo (Zabbix)', x: 26, z: -112, w: 12, d: 16, h: 6, roof: 'red', block: false },
   { id: 'ALM', type: 'warehouse', name: 'Almacén general y repuestos', x: -14, z: -112, w: 40, d: 28, h: 9, roof: 'mixed', block: true },
   { id: 'TAL', type: 'building', name: 'Taller de mantenimiento', x: -46, z: -112, w: 10, d: 20, h: 6, roof: 'orange', block: true },
   { id: 'PREP', type: 'prep', name: 'Preparación (limpieza, quebrado, descascarado, acondicionado, laminado)', x: 18, z: -72, w: 26, d: 18, h: 16, roof: 'red', block: true },
@@ -106,6 +106,15 @@ export const BUILDINGS = [
   { id: 'GAR', type: 'gatehouse', name: 'Portería', x: 62, z: 81, w: 4, d: 5, h: 4, roof: 'white', block: true },
 ];
 
+// Monitoring room inside the offices: video wall on the north wall (facing +z), the plant
+// manager's place in front of it, door on the south side.
+export const MONITOR_ROOM = {
+  x: 26, z: -112, w: 12, d: 16,
+  seat: { x: 26, z: -108.5, h: -Math.PI / 2 }, // looking north, at the wall
+  door: { x: 26, z: -102 },
+  view: { pos: [26.6, 2.7, -99.5], target: [26, 2.3, -119.6] }, // through the door, eye level, the manager in front
+};
+
 // Points of interest for the "Proceso" tour.
 export const TOUR = [
   { id: 'recepcion', title: '1. Recepción de camiones', desc: 'Ingreso por RN4, portería y playa de espera.', target: [40, 0, 70], dist: 70 },
@@ -115,4 +124,5 @@ export const TOUR = [
   { id: 'ext', title: '5. Extracción con hexano', desc: 'Extractor, desolventizador-tostador y destilación de miscela.', target: [18, 0, -32], dist: 60 },
   { id: 'sf', title: '6. Sala de fuerza', desc: 'Calderas, vapor de proceso, chimenea y torre de enfriamiento.', target: [44, 0, -45], dist: 60 },
   { id: 'despacho', title: '7. Almacén y despacho', desc: 'Tanques de aceite, galpón de harina y carga de cisternas.', target: [20, 0, 5], dist: 90 },
+  { id: 'monitor', title: '8. Sala de monitoreo (Zabbix)', desc: 'Dashboard de Zabbix en el muro de video; el gerente de planta lo sigue en vivo.', monitor: true, target: [26, 0, -112], dist: 30 },
 ];

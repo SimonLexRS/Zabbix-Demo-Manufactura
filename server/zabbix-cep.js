@@ -201,8 +201,18 @@ export async function cepResults(rpc, hostids) {
       symptoms: (symptomsOf.get(p.eventid) || []).map((s) => ({ name: s.name, severity: Number(s.severity) })),
     }))
     .filter((g) => g.symptoms.length || g.incidente || g.repeticiones || g.area);
+  // Open problems for the monitoring room screen: causes first, each followed by its symptoms.
+  const now = Date.now() / 1000;
+  const row = (p) => ({ name: p.name, severity: Number(p.severity), age: now - Number(p.clock), symptom: !!(p.cause_eventid && p.cause_eventid !== '0'), incident: !!tagOf(p, 'incidente'), sintomas: Number(tagOf(p, 'sintomas') || 0) || 0 });
+  const causes = probs.filter((p) => !p.cause_eventid || p.cause_eventid === '0').sort((a, b) => b.severity - a.severity || b.clock - a.clock);
+  const problems = [];
+  for (const c of causes) {
+    problems.push(row(c));
+    for (const sy of symptomsOf.get(c.eventid) || []) problems.push(row(sy));
+  }
   return {
     at: Date.now(),
+    problems: problems.slice(0, 14),
     open: probs.length,
     symptoms: probs.filter((p) => p.cause_eventid && p.cause_eventid !== '0').length,
     incidents: groups.filter((g) => g.incidente).length,

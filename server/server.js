@@ -17,6 +17,7 @@
 //   POST /api/zabbix/test | /api/zabbix/provision | /api/zabbix/send-now | /api/zabbix/cep
 //   POST /api/auth/check           validates the admin token
 //   GET  /api/zabbix/status        sender / provisioning status
+//   POST /api/presence             someone is in the monitoring room (the manager comes)
 //   GET  /healthz
 //
 // Every POST/PUT requires the header x-control-token = CONTROL_TOKEN (when set).
@@ -42,6 +43,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 8080);
 const TICK_MS = 200;
 const FULL_EVERY = 5; // full snapshot every 5 ticks (1 s)
+const DASHBOARD_NAME = 'Planta Aceitera · Estado y CEP'; // created by tools/create-zabbix-dashboard.mjs
 const CONTROL_TOKEN = process.env.CONTROL_TOKEN || '';
 const TEMPLATES = { templateFile: path.join(ROOT, 'zabbix', 'template_planta_aceitera_sender.yaml'), iotTemplateFile: path.join(ROOT, 'zabbix', 'template_planta_aceitera_iot.yaml') };
 const PUBLIC = new Set(['index.html', 'css', 'js', 'favicon.svg']);
@@ -161,6 +163,12 @@ async function zabbixProvision() {
     zbx.provision = { state: 'ok', at: stamp(), ...r };
     console.log(`Zabbix ${r.version}: templates importados, ${r.action} (hostid ${r.hostid}); IoT ${JSON.stringify(r.iot)}`);
     await zabbixCep();
+    try {
+      const [d] = await api('dashboard.get', { filter: { name: [DASHBOARD_NAME] }, output: ['dashboardid'] });
+      zbx.dashboardId = d?.dashboardid ?? null;
+    } catch {
+      zbx.dashboardId = null;
+    }
     lastDiscoveryAt = 0;
     discoveryFast = true;
     setTimeout(() => {
@@ -260,6 +268,7 @@ const zabbixSummary = () => ({
   iot: zbx.iot.last,
   provision: zbx.provision.state,
   cep: { state: zbx.cep.state, rules: zbx.cep.rules, results: zbx.cep.results },
+  dashboardUrl: cfg().zabbix.webUrl && zbx.dashboardId ? `${cfg().zabbix.webUrl.replace(/\/$/, '')}/zabbix.php?action=dashboard.view&dashboardid=${zbx.dashboardId}` : null,
   ack: ack.status(),
 });
 const withZabbix = (snap) => ({ ...snap, zabbix: zabbixSummary() });
@@ -271,7 +280,9 @@ let lastSnapshot = withZabbix(sim.snapshot());
 let tickN = 0;
 let lastSig = '';
 let nextTick = Date.now() + TICK_MS;
+let lastPresence = 0;
 function tick() {
+  sim.monitorPresence = Date.now() - lastPresence < 25000;
   sim.advance((TICK_MS / 1000) * sim.speed);
   lastSnapshot = withZabbix(sim.snapshot());
   const sig = urgentSignature(lastSnapshot);
@@ -430,6 +441,13 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/problems' && req.method === 'GET') return json(res, 200, { randomFaults: sim.randomFaults, problems: sim.problemStates() });
     if (p === '/api/config' && req.method === 'GET') return json(res, 200, configResponse());
 
+    // Someone is looking at the monitoring room: the plant manager goes there. Harmless, so it
+    // needs no admin key; rate-limited.
+    if (p === '/api/presence' && req.method === 'POST') {
+      const now = Date.now();
+      if (now - lastPresence > 1500) lastPresence = now;
+      return json(res, 200, { ok: true });
+    }
     if (p.startsWith('/api/')) {
       if (!['POST', 'PUT'].includes(req.method)) return json(res, 405, { error: 'método no permitido' });
       if (!authorized(req)) return json(res, 401, { error: 'clave de administrador requerida' });

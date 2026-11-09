@@ -5,7 +5,7 @@
 //  - the HSE chief orders an evacuation when hexane LEL is dangerous.
 // Their actions are also queued in sim.outbox so the server can acknowledge the
 // matching Zabbix problem (assignment, complaints, escalation, closure).
-import { STATIONS, BOILERS, BUILDINGS, STORAGES } from './layout.js';
+import { STATIONS, BOILERS, BUILDINGS, STORAGES, MONITOR_ROOM } from './layout.js';
 import { PROBLEM_BY_ID } from './problems.js';
 
 const r = (a, b) => a + Math.random() * (b - a);
@@ -23,10 +23,11 @@ const WORKSHOP = [-38, -100];
 const MEETING_POINT = [-34, -80];
 
 export const STAFF = [
-  { id: 'GER', name: 'Gerente de planta', role: 'Gerencia', kind: 'manager', stops: [[24, -100], [36, -98], [12, -98]] },
-  { id: 'JPROD', name: 'Jefe de producción', role: 'Jefatura · Producción', kind: 'chief', areas: ['produccion', 'energia', 'extraccion'], stops: [[10, -96], [4, -58], [34, -46], [10, -96]] },
-  { id: 'JHSE', name: 'Jefe de seguridad (HSE)', role: 'Jefatura · Seguridad', kind: 'chief', areas: ['transito', 'seguridad'], stops: [[34, -96], [46, 56], [32, -20], [34, -96]] },
-  { id: 'JMANT', name: 'Jefe de mantenimiento', role: 'Jefatura · Mantenimiento', kind: 'chief', areas: ['mantenimiento'], stops: [[-40, -98], [-30, -96], [-40, -98]] },
+  // The plant manager's place is the monitoring room, in front of the Zabbix dashboard.
+  { id: 'GER', name: 'Gerente de planta', role: 'Gerencia · Sala de monitoreo', kind: 'manager', post: [MONITOR_ROOM.seat.x, MONITOR_ROOM.seat.z, MONITOR_ROOM.seat.x, MONITOR_ROOM.z - 8], round: [[MONITOR_ROOM.x - 3.5, MONITOR_ROOM.z - 4], [MONITOR_ROOM.x + 3.5, MONITOR_ROOM.z - 4]] },
+  { id: 'JPROD', name: 'Jefe de producción', role: 'Jefatura · Producción', kind: 'chief', areas: ['produccion', 'energia', 'extraccion'], post: [17, -111, 26, -111], round: [[12, -100]] },
+  { id: 'JHSE', name: 'Jefe de seguridad (HSE)', role: 'Jefatura · Seguridad', kind: 'chief', areas: ['transito', 'seguridad'], post: [17, -117, 26, -117], round: [[12, -100]] },
+  { id: 'JMANT', name: 'Jefe de mantenimiento', role: 'Jefatura · Mantenimiento', kind: 'chief', areas: ['mantenimiento'], post: [-38.5, -108, -46, -112], round: [[-36, -100]] },
   { id: 'TI', name: 'Técnico de redes / TI', role: 'Técnico', kind: 'tech', skills: ['red'] },
   { id: 'ELEC', name: 'Electricista', role: 'Técnico', kind: 'tech', skills: ['electrico'] },
   { id: 'MEC1', name: 'Mecánico 1', role: 'Técnico', kind: 'tech', skills: ['mecanico'] },
@@ -70,6 +71,8 @@ const SAY = {
   nearMiss: ['¡Casi accidente! Bajen la velocidad en las vías internas.', '¡Cuidado con los peatones! Esto va al reporte de seguridad.'],
   flagman: ['Yo doy el paso, avance despacio.', 'Despejen el cruce, uno por vez.'],
   evac: ['¡Evacuación! Todos al punto de encuentro.', 'Alarma de gas: salgan de extracción ahora.'],
+  summon: ['Voy para la sala de monitoreo.', 'Ya voy, quiero ver el dashboard de Zabbix.', 'Voy a la sala, ¿qué muestra Zabbix?'],
+  monitor: ['Revisando el dashboard de Zabbix.', 'Todo a la vista en Zabbix: problemas, CEP y KPIs.'],
 };
 const fill = (s, vars) => s.replace(/\{(\w)\}/g, (_, k) => vars[k] ?? '');
 
@@ -136,7 +139,45 @@ export class Staff {
     this.progress();
     this.supervise();
     this.evacuation();
+    this.manager();
     for (const p of this.sim.people) if (p.say && this.sim.t > p.say.until) p.say = null;
+  }
+
+  // Someone entered the monitoring room: the plant manager comes right away (whatever he was
+  // doing) and stays in front of the dashboard while they are there.
+  manager() {
+    const g = this.byId('GER');
+    if (!g) return;
+    const R = MONITOR_ROOM;
+    const inRoom = Math.abs(g.x - R.x) < R.w / 2 && Math.abs(g.z - R.z) < R.d / 2;
+    if (this.sim.monitorPresence) {
+      if (g.task?.type === 'monitor') {
+        // Gets off the cart at the door and walks in.
+        if (g.riding && Math.hypot(g.x - R.door.x, g.z - R.door.z) < 3) {
+          g.riding = false;
+          g.speed = 4;
+        }
+        if (!g.path) {
+          g.h = R.seat.h;
+          g.riding = false;
+        }
+        return;
+      }
+      const seat = { x: R.seat.x, z: R.seat.z };
+      // Far away: he comes in a service cart; close by: a brisk walk.
+      const far = Math.hypot(g.x - R.door.x, g.z - R.door.z) > 30;
+      g.speed = far ? 9 : 5.5;
+      g.riding = far;
+      this.walk(g, seat, { type: 'monitor' });
+      g.path.push(seat);
+      if (!inRoom || Math.hypot(g.x - seat.x, g.z - seat.z) > 1.5) this.say(g, 'summon');
+      else this.say(g, 'monitor');
+    } else if (g.task?.type === 'monitor') {
+      if (!g.path) {
+        g.task = null;
+        g.speed = 3;
+      }
+    }
   }
 
   syncOrders() {
@@ -291,7 +332,7 @@ export class Staff {
         o.escalated = true;
         sim.counters.escalations++;
         const g = this.byId('GER');
-        if (g && !g.task) this.walk(g, this.spot(loc.x, loc.z, 6), { type: 'inspect', order: o.id });
+        if (g && !g.task && !sim.monitorPresence) this.walk(g, this.spot(loc.x, loc.z, 6), { type: 'inspect', order: o.id });
         this.say(g, 'escalate', { x: o.short, m: Math.round(age) }, 3, { problem: o.problem, kind: 'escalate' });
       }
       if (o.status === 'abierta' && !o.techs.length && age > 10 && !o.unassignedWarned) {

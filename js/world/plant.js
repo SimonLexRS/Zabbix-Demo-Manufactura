@@ -5,6 +5,7 @@ import { CSS2DObject } from 'three/addons/CSS2DRenderer.js';
 import { STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS, STATIONS } from '../sim/layout.js';
 import * as B from './builders.js';
 import { flowTex, levelColor } from './materials.js';
+import { DashboardWall } from './dashboard.js';
 
 const STATION_BUILDERS = {
   SAMP: () => B.sampler(),
@@ -107,6 +108,9 @@ export class PlantView {
     this.time = 0;
     this.labelsVisible = labelsVisible;
     B.setMaterials(M);
+    this.wall = new DashboardWall(); // video wall of the monitoring room
+    this.monitorMode = false;
+    this.camera = null;
     this.buildStatic();
     this.buildFlows();
     this.buildSelection();
@@ -213,11 +217,23 @@ export class PlantView {
         case 'gatehouse':
           g = B.gatehouse(b);
           break;
+        case 'controlRoom':
+          g = B.controlRoom(b, this.wall.materials);
+          this.room = { g, b };
+          break;
         default:
           g = B.building(b);
       }
       this.add(g, b.x, b.z);
       this.pick(g, 'building', b.id);
+      if (b.type === 'controlRoom') {
+        // Clicking the video wall opens the real Zabbix dashboard.
+        for (const sc of g.userData.screens) {
+          sc.userData.pickRoot = sc;
+          sc.userData.pick = { kind: 'dashboard', id: 'zabbix' };
+          this.pickables.push(sc);
+        }
+      }
       if (b.id === 'SP') {
         const gg = B.gauge(b.h * 0.8);
         gg.group.position.set(b.x, 0.5, b.z + b.r + 0.4);
@@ -380,6 +396,7 @@ export class PlantView {
 
   // ───────────── per-snapshot (state) updates ─────────────
   applyState(s) {
+    this.wall.update(s);
     for (const st of s.storages) {
       const g = this.gauges.get(st.id);
       if (g) g.set(st.pct, st.temp > 32 ? 0xe5484d : levelColor(st.pct));
@@ -465,7 +482,7 @@ export class PlantView {
       seen.add(v.id);
       let g = this.vehicles.get(v.id);
       if (!g) {
-        g = B.truck(v.kind, parseInt(v.id.slice(1), 10));
+        g = v.kind === 'car' ? B.car(v.variant, v.color) : B.truck(v.kind, parseInt(v.id.slice(1), 10));
         g.userData.pick = { kind: 'truck', id: v.id };
         g.traverse((o) => (o.userData.pickRoot = g));
         g.userData.lat = 0;
@@ -474,7 +491,10 @@ export class PlantView {
       }
       const ud = g.userData;
       const va = A.get(v.id) || v;
+      const px = ud.pos?.x;
+      const pz = ud.pos?.z;
       const pos = curvePoint(P0.get(v.id) || va, va, v, P3.get(v.id) || v, alpha, ud.pos || (ud.pos = { x: 0, z: 0 }));
+      const moved = px === undefined ? 0 : Math.hypot(pos.x - px, pos.z - pz);
       const dir = curveDir(P0.get(v.id) || va, va, v, P3.get(v.id) || v, alpha);
       const want = dir === null ? lerpAngle(va.h, v.h, Math.min(1, alpha)) : dir;
       ud.yaw = ud.yaw === undefined ? want : turnToward(ud.yaw, want, ease(7), 2.4 * k * dt);
@@ -482,6 +502,29 @@ export class PlantView {
       ud.lat += ((v.passing ? 3.4 : 0) - ud.lat) * ease(3 * k);
       g.position.set(pos.x + Math.sin(ud.yaw) * ud.lat, 0, pos.z - Math.cos(ud.yaw) * ud.lat);
       g.rotation.y = -ud.yaw - (v.crashed ? v.tilt : 0);
+      // Wheels turn with the distance travelled; the semitrailer follows the king pin
+      // (kinematic hitch: it cuts inside the curve, as a real one does).
+      if (moved > 0 && moved < 5) for (const w of ud.wheels || []) w.rotation.z -= moved / ud.wheelR;
+      if (ud.trailer) {
+        let turn = ud.yaw - (ud.prevYaw ?? ud.yaw);
+        while (turn > Math.PI) turn -= Math.PI * 2;
+        while (turn < -Math.PI) turn += Math.PI * 2;
+        ud.prevYaw = ud.yaw;
+        if (ud.trailerYaw === undefined || moved >= 5) ud.trailerYaw = ud.yaw;
+        else if (!v.crashed) {
+          // Turning almost on the spot (the route reverses at a station): the rig turns as a whole.
+          if (moved < Math.abs(turn) * 1.5) ud.trailerYaw += turn;
+          let d = ud.yaw - ud.trailerYaw;
+          while (d > Math.PI) d -= Math.PI * 2;
+          while (d < -Math.PI) d += Math.PI * 2;
+          ud.trailerYaw += Math.sin(d) * Math.min(1, moved / ud.trailerLen);
+          d = ud.yaw - ud.trailerYaw;
+          while (d > Math.PI) d -= Math.PI * 2;
+          while (d < -Math.PI) d += Math.PI * 2;
+          if (Math.abs(d) > 1.2) ud.trailerYaw = ud.yaw - Math.sign(d) * 1.2; // never jackknife
+        }
+        ud.trailer.rotation.y = ud.trailerYaw - ud.yaw;
+      }
       const load = ud.load;
       if (load) {
         const l = Math.max(0.02, v.loaded);
@@ -515,13 +558,13 @@ export class PlantView {
     for (const p of b.people) {
       let g = this.people.get(p.id);
       if (!g) {
-        g = B.person(p.helmet, p.vest);
+        g = B.person(p.helmet, p.vest, { kind: p.kind, seed: parseInt(p.id.slice(1), 10) * 7 });
         g.userData.pick = { kind: 'person', id: p.id };
         g.traverse((o) => (o.userData.pickRoot = g));
-        if (p.kind === 'tech') {
+        if (p.kind === 'tech' || p.kind === 'manager') {
           const c = B.cart();
           c.visible = false;
-          c.scale.setScalar(0.8); // the person group is scaled 1.25
+          c.scale.setScalar(1.3); // the person group is scaled 0.74
           g.add(c);
           g.userData.cart = c;
         }
@@ -539,10 +582,10 @@ export class PlantView {
       ud.moving = p.moving;
       // Technicians ride a cart while driving to/from a job (sitting a bit higher).
       if (ud.cart) {
-        const riding = p.moving;
+        const riding = p.riding ?? p.moving;
         ud.cart.visible = riding;
         ud.legs.visible = !riding;
-        g.children.forEach((c) => c !== ud.cart && c !== ud.legs && (c.position.y = (c.userData.baseY ??= c.position.y) + (riding ? 0.45 : 0)));
+        g.children.forEach((c) => c !== ud.cart && c !== ud.legs && (c.position.y = (c.userData.baseY ??= c.position.y) + (riding ? 0.35 : 0)));
       }
       this.bubble(g, p.say);
     }
@@ -570,6 +613,18 @@ export class PlantView {
 
   frame(dt, speed) {
     this.time += dt;
+    // Monitoring room: the roof fades out when looking into the room.
+    if (this.room && this.camera) {
+      const { g, b } = this.room;
+      const c = this.camera.position;
+      const near = Math.hypot(c.x - b.x, c.z - b.z) < 30 && c.y < 40;
+      const want = this.monitorMode || near ? 0.0 : 1;
+      const m = g.userData.roofMat;
+      m.opacity += (want - m.opacity) * Math.min(1, dt * 4);
+      g.userData.roof.visible = m.opacity > 0.03;
+      m.depthWrite = m.opacity > 0.95;
+      g.userData.roof.castShadow = m.opacity > 0.95;
+    }
     const k = Math.max(1, Math.min(speed || 1, 6));
     for (const list of Object.values(this.flows)) for (const f of list) f.update(dt * k);
     if (this.fans) for (const f of this.fans) f.rotation.y += dt * (this.crushing ? 6 : 1.5);
@@ -592,12 +647,17 @@ export class PlantView {
     }
     // People walking animation.
     for (const g of this.people.values()) {
-      const legs = g.userData.legs;
-      if (g.userData.moving) {
-        legs.children[0].rotation.z = Math.sin(this.time * 9) * 0.5;
-        legs.children[1].rotation.z = -Math.sin(this.time * 9) * 0.5;
-      } else {
-        legs.children[0].rotation.z = legs.children[1].rotation.z = 0;
+      const { legs, arms } = g.userData;
+      const walking = g.userData.moving && legs.visible;
+      const ph = this.time * 8 + (g.id % 7);
+      const swing = walking ? Math.sin(ph) * 0.55 : 0;
+      legs.children[0].rotation.z += (swing - legs.children[0].rotation.z) * Math.min(1, dt * 12);
+      legs.children[1].rotation.z += (-swing - legs.children[1].rotation.z) * Math.min(1, dt * 12);
+      if (arms) {
+        // Arms swing opposite to the legs; at rest a slight breathing sway.
+        const rest = walking ? 0 : Math.sin(this.time * 1.6 + g.id) * 0.03;
+        arms[0].rotation.z += (-swing * 0.8 + rest - arms[0].rotation.z) * Math.min(1, dt * 12);
+        arms[1].rotation.z += (swing * 0.8 + rest - arms[1].rotation.z) * Math.min(1, dt * 12);
       }
     }
     // Station animations.

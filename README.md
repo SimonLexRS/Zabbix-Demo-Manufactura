@@ -70,8 +70,9 @@ Botón **Fallas** en la vista 3D (o el panel de cada equipo) con un interruptor 
 | `ol_arm` | Brazo de carga de aceite bloqueado | cisterna detenida | Promedio |
 | `plc_ext_comm` | PLC de extracción sin comunicación | se dejan de enviar sus ítems → `nodata` en Zabbix | Alta |
 
-- **Manual**: queda activo hasta que lo apagues.
-- **Aleatorio** (interruptor *Fallas aleatorias*, o `RANDOM_FAULTS=0` para deshabilitar): cada 2–6 h simuladas se activa uno y se resuelve solo en 20–120 min. Si activas a mano uno aleatorio, pasa a manual.
+- **Por defecto las fallas se activan a mano** (botón **Fallas**).
+- **Manual**: queda activo en la app y en Zabbix hasta que lo apagues. El técnico va y trabaja en el sitio, pero no la cierra. Para que la cierre, activa *Configuración → Realismo → Los técnicos reparan también las fallas manuales* o define `TECHS_REPAIR_MANUAL=1`.
+- **Aleatorio** (interruptor *Fallas aleatorias*, o `RANDOM_FAULTS=1`): cada 2–6 h simuladas se activa uno, más los incidentes viales, y los técnicos lo resuelven. Si activas a mano uno aleatorio, pasa a manual.
 - En Zabbix cada uno es `planta.problem[<id>]` = 0 normal / 1 manual / 2 aleatoria, con su trigger (`last()>0`).
 
 API: `GET /api/problems`, `POST /api/problems` con `{"id":"bal_in_net","active":true}`, `{"randomFaults":false}` o `{"clearAll":true}`.
@@ -112,6 +113,18 @@ Los síntomas ya **no dependen** de su causa: antes las dependencias impedían q
 - **En el dashboard**: la página "CEP de Zabbix" (`tools/create-zabbix-dashboard.mjs`) muestra incidentes, causas con síntomas y responsable.
 - **Para desactivarlo**: `ZABBIX_CEP=0` o el interruptor del panel.
 
+## Sala de monitoreo
+
+Las oficinas (`OFI`) son ahora **"Oficinas y sala de monitoreo"**:
+- **Interior:** paredes de vidrio, muro de video de 3 pantallas, consola con monitores y sillas. El techo se vuelve transparente al acercar la cámara.
+- **Pantallas** (`js/world/dashboard.js`), con la estética oscura de Zabbix y datos reales una vez por segundo:
+  - estado de la planta y de la integración (sender, alta, CEP);
+  - **problemas abiertos en Zabbix**, con causas, síntomas e incidentes CEP;
+  - tendencias.
+- **Cómo entrar:** botón **Sala de monitoreo** (o el paso 8 del Recorrido). La cámara entra por la puerta y la app avisa al servidor (`POST /api/presence`).
+- **El gerente de planta:** su lugar es la sala, frente al muro. Si está en otro lado, viene de inmediato (en carrito si está lejos) y se queda mirando el dashboard mientras haya alguien en la sala.
+- **Dashboard real:** un clic en el muro lo abre en Zabbix (requiere `ZABBIX_WEB_URL` o *Configuración → Zabbix → URL web pública*).
+
 ## Realismo: tránsito, personal y órdenes de trabajo
 
 **Tránsito** (`js/sim/traffic.js`):
@@ -120,13 +133,16 @@ Los síntomas ya **no dependen** de su causa: antes las dependencias impedían q
 - **Peatones**: ceden el paso a los operarios que cruzan.
 - **Carriles**: las rutas se alinean al eje de cada camino, así cada sentido circula por su carril; en los cruces el camión espera con el paragolpes en la línea y libera el cruce cuando lo dejó entero.
 - **Sobrepaso**: adelantan por el otro carril solo a un camión estacionado en una estación o averiado; nunca a uno que espera en la misma fila, ni dentro de la playa.
-- **Ingreso**: forman fila en la banquina de RN4 (fuera de los carriles) y entran a la portería de a uno.
+- **Ingreso**: forman fila en la banquina de RN4 (fuera de los carriles) y entran a la portería de a uno, por el carril de entrada del acceso. Los que salen usan el carril de salida.
+- **Tránsito de paso en RN4**: autos, camionetas y furgonetas de la simulación, por los mismos carriles. Frenan detrás de los camiones y ceden el paso en el acceso a planta. Un camión solo cruza la ruta cuando ningún auto está en el cruce ni demasiado cerca para frenar.
+- **No bloquear el cruce**: nadie entra a un cruce si no tiene lugar para salir de él.
 - **Destrabes**: si se forma un ciclo de espera, sale primero el que se retira de planta. Si un cruce queda trabado, el supervisor hace de señalero.
 - **Incidentes viales**: con fallas aleatorias activas, cada pocas horas simuladas (por defecto 8 por día, `ROAD_INCIDENTS` o Configuración → Realismo) falla el freno de un camión o un conductor se distrae.
 - **Colisiones**: un camión sin frenos (falla `brake_fail`) o con el conductor distraído puede chocar. El camión chocado enciende las balizas y pone un triángulo; la vía queda bloqueada hasta que llegan mecánico, técnico de seguridad y **grúa**, y luego los camiones dañados se retiran.
 - **Casi accidentes**: si un camión frena al límite cerca de una persona se registra como casi accidente. Nunca hay atropellos.
 
 **Personal** (`js/sim/staff.js`):
+- **Cada operario tiene un puesto fijo** frente a su equipo (caseta de balanza, calador, laboratorio, volcadora, silos, preparación, extracción, sala de fuerza). Hace rondas cortas en su área y vuelve; nunca se queda parado sobre la calzada. Los jefes están junto a las oficinas o el taller y el gerente, en la sala de monitoreo.
 - **Gerencia y jefaturas**: gerente de planta, jefes de producción, seguridad (HSE) y mantenimiento, más el supervisor de turno.
 - **Técnicos**: TI/redes, electricista, 2 mecánicos, instrumentista, calderista y técnico de seguridad. Salen del taller en carrito de servicio.
 - **Órdenes de trabajo (OT)**: cada falla abre una OT. Se asigna al técnico libre con la especialidad correcta, que va al equipo, repara y cierra la falla (las manuales también, salvo que lo apagues en Configuración → Realismo).
@@ -161,7 +177,9 @@ Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 
 | `ZABBIX_API_TOKEN` | — | Token de API de Zabbix |
 | `ZABBIX_HOST_GROUP` | `Manufactura` | Grupo del host |
 | `ZABBIX_NETWORK` | `zabbix-testing-lab01-mybwkj_default` | Red Docker del stack de Zabbix (solo compose) |
-| `RANDOM_FAULTS` | `1` | `0` = solo fallas manuales |
+| `RANDOM_FAULTS` | `0` | `1` = fallas aleatorias e incidentes viales automáticos |
+| `TECHS_REPAIR_MANUAL` | `0` | `1` = los técnicos también cierran las fallas manuales |
+| `ZABBIX_WEB_URL` | — | URL pública de Zabbix: el muro de la sala de monitoreo abre el dashboard real |
 | `COLLISIONS` | `1` | `0` = sin colisiones (los conductores siempre frenan) |
 | `ROAD_INCIDENTS` | `8` | incidentes viales (falla de frenos / conductor distraído) por día simulado con fallas aleatorias activas; `0` = solo manuales |
 | `ZABBIX_ACK` | `1` | `0` = no registrar acciones del personal en Zabbix |

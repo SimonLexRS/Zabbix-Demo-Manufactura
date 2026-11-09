@@ -87,6 +87,7 @@ export class UI {
       this.h.onLabels(on);
     };
     $('#btnHome').onclick = () => this.h.onHome();
+    $('#btnMonitor').onclick = () => this.h.onMonitor();
     $('#btnConfig').onclick = () => {
       this.closeMenus();
       this.h.onConfig();
@@ -199,6 +200,10 @@ export class UI {
   updateFast(s) {
     this.last = s;
     if (this.selected && (this.selected.kind === 'truck' || this.selected.kind === 'person')) this.renderDetails(this.selected, s);
+  }
+
+  setMonitor(on) {
+    $('#btnMonitor').classList.toggle('active', on);
   }
 
   update(s) {
@@ -581,6 +586,14 @@ export function describe(pick, s) {
   if (kind === 'truck') {
     const v = s.vehicles.find((x) => x.id === id);
     if (!v) return null;
+    if (v.kind === 'car') {
+      const kindName = { sedan: 'Auto', suv: 'Camioneta SUV', pickup: 'Camioneta pickup', van: 'Furgoneta' }[v.variant] ?? 'Vehículo';
+      const waitTxt = v.waitReason === 'cruce' ? 'Cediendo el paso a un camión en el acceso' : v.waitReason ? 'Frenado detrás de otro vehículo' : v.braking ? 'Frenando' : 'En marcha';
+      return {
+        kind: 'Vehículo particular en RN4', title: `${kindName} · ${v.plate}`, sub: v.label, status: waitTxt, statusClass: v.waitReason || v.braking ? 'warn' : 'ok',
+        rows: [['Velocidad', `${v.speedKmh} km/h`, ''], ['Conducción', waitTxt, ''], ['Patente', v.plate, '']], actions: [{ label: 'Seguir con cámara', follow: id }],
+      };
+    }
     const type = { soy: 'Camión granelero · soya', oil: 'Cisterna · aceite crudo', meal: 'Camión · harina de soya', tow: 'Grúa de mantenimiento' }[v.kind];
     const WAIT = { vehiculo: 'detenido detrás de otro vehículo', cruce: 'esperando paso en el cruce', peaton: 'cediendo el paso a un peatón' };
     const drive = v.crashed ? 'Colisionado' : v.brakeFail ? 'Sin frenos' : v.passing ? 'Sobrepasando' : v.braking ? 'Frenando' : v.speedKmh > 1 ? 'En marcha' : v.waitReason ? `Detenido: ${WAIT[v.waitReason]}` : 'Detenido';

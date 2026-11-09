@@ -10,7 +10,9 @@ services:
     environment:
       PORT: 8080
       SIM_SPEED: ${SIM_SPEED:-1}
-      RANDOM_FAULTS: ${RANDOM_FAULTS:-1}
+      RANDOM_FAULTS: ${RANDOM_FAULTS:-0}
+      TECHS_REPAIR_MANUAL: ${TECHS_REPAIR_MANUAL:-0}
+      ZABBIX_WEB_URL: ${ZABBIX_WEB_URL:-}
       CONTROL_TOKEN: ${CONTROL_TOKEN:-}
       DATA_DIR: /app/data
       IOT_ENABLED: ${IOT_ENABLED:-1}

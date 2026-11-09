@@ -108,6 +108,7 @@ export class ConfigPanel {
         <label>Intervalo de envío (s)<input name="sendInterval" type="number" min="2" max="3600" value="${z.sendInterval}" /></label>
         <label>Reenvío de LLD (s)<input name="lldInterval" type="number" min="60" max="86400" value="${z.lldInterval}" /></label>
         <label class="wide">URL de la API<input name="apiUrl" value="${esc(z.apiUrl)}" placeholder="http://zabbix-web:8080/api_jsonrpc.php" /></label>
+        <label class="wide">URL web pública de Zabbix (link al dashboard desde la sala de monitoreo)<input name="webUrl" value="${esc(z.webUrl ?? '')}" placeholder="https://zabbix.midominio.com" /></label>
         <label class="wide">Token de API ${z.hasToken ? `(guardado: ${esc(z.apiToken)})` : '(no configurado)'}<input name="apiToken" type="password" autocomplete="off" placeholder="${z.hasToken ? 'Dejar vacío para mantener el actual' : 'Pega el token de Zabbix'}" /></label>
         <label class="wide">Orígenes permitidos de trapper ({$TRAPPER.ALLOWED_HOSTS})<input name="trapperAllowedHosts" value="${esc(z.trapperAllowedHosts)}" /></label>
       </div>
@@ -138,7 +139,7 @@ export class ConfigPanel {
   zabbixForm() {
     const f = $('#zform', this.body);
     const v = (n) => f.querySelector(`[name="${n}"]`).value.trim();
-    const z = { server: v('server'), port: Number(v('port')), host: v('host'), hostGroup: v('hostGroup'), sendInterval: Number(v('sendInterval')), lldInterval: Number(v('lldInterval')), apiUrl: v('apiUrl'), trapperAllowedHosts: v('trapperAllowedHosts') };
+    const z = { server: v('server'), port: Number(v('port')), host: v('host'), hostGroup: v('hostGroup'), sendInterval: Number(v('sendInterval')), lldInterval: Number(v('lldInterval')), apiUrl: v('apiUrl'), webUrl: v('webUrl'), trapperAllowedHosts: v('trapperAllowedHosts') };
     if (v('apiToken')) z.apiToken = v('apiToken');
     return z;
   }

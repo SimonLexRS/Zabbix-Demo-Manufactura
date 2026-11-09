@@ -7,6 +7,8 @@ import { validateRules } from '../js/sim/cep.js';
 import { IOT_BY_ID } from '../js/sim/iot.js';
 
 const off = (v) => ['0', 'false', 'no', 'off'].includes(String(v ?? '').toLowerCase());
+const on = (v) => ['1', 'true', 'yes', 'on'].includes(String(v ?? '').toLowerCase());
+export const CONFIG_VERSION = 2;
 const num = (v, min, max, def) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : def;
@@ -29,18 +31,20 @@ export function defaultsFromEnv(env = process.env) {
       lldInterval: num(env.ZABBIX_LLD_INTERVAL, 60, 86400, 600),
       apiUrl: env.ZABBIX_API_URL || '',
       apiToken: env.ZABBIX_API_TOKEN || '',
+      webUrl: env.ZABBIX_WEB_URL || '', // public Zabbix frontend (link to the dashboard)
       trapperAllowedHosts: env.ZABBIX_TRAPPER_ALLOWED_HOSTS || '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1',
     },
     iot: { enabled: !off(env.IOT_ENABLED ?? '1'), hostPrefix: env.IOT_HOST_PREFIX || 'iot-', group: env.IOT_HOST_GROUP || 'Manufactura/IoT', randomDropouts: true, devices: {} },
     // zabbixCep: event correlation inside Zabbix 8.0 with native CEP rules (server/zabbix-cep.js).
     cep: { enabled: true, rules: null, zabbixCep: !off(env.ZABBIX_CEP ?? '1') },
-    sim: { randomFaults: !off(env.RANDOM_FAULTS), speed: num(env.SIM_SPEED, 0, 30, 1) },
+    // Faults are activated by hand by default (RANDOM_FAULTS=1 turns on the random generator).
+    sim: { randomFaults: on(env.RANDOM_FAULTS), speed: num(env.SIM_SPEED, 0, 30, 1) },
     realism: {
       collisions: !off(env.COLLISIONS ?? '1'),
       distractionPerHour: 0.15, // chance per truck-hour of a short driver distraction
       incidentsPerDay: num(env.ROAD_INCIDENTS, 0, 48, 8), // brake failures / distracted drivers per simulated day (with random faults on)
       speedFactor: 1,
-      techsRepairManual: true,
+      techsRepairManual: on(env.TECHS_REPAIR_MANUAL), // manual faults stay until switched off
       escalation1: 15,
       escalation2: 40,
       ackEvents: !off(env.ZABBIX_ACK ?? '1'),
@@ -65,6 +69,7 @@ export function applyPatch(cfg, patch = {}) {
   if (z.sendInterval !== undefined) c.zabbix.sendInterval = num(z.sendInterval, 2, 3600, c.zabbix.sendInterval);
   if (z.lldInterval !== undefined) c.zabbix.lldInterval = num(z.lldInterval, 60, 86400, c.zabbix.lldInterval);
   if (z.apiUrl !== undefined) set(c.zabbix, 'apiUrl', z.apiUrl === '' ? '' : str(z.apiUrl, /^https?:\/\/[^\s]+$/, 300), 'URL de la API');
+  if (z.webUrl !== undefined) set(c.zabbix, 'webUrl', z.webUrl === '' ? '' : str(z.webUrl, /^https?:\/\/[^\s]+$/, 300), 'URL web de Zabbix');
   if (z.apiToken !== undefined) set(c.zabbix, 'apiToken', z.apiToken === '' ? '' : str(z.apiToken, /^[A-Za-z0-9]{32,128}$/, 128), 'token de API');
   if (z.trapperAllowedHosts !== undefined) set(c.zabbix, 'trapperAllowedHosts', str(z.trapperAllowedHosts, /^[0-9A-Za-z.:/,\s{}$_-]+$/, 500), 'allowed hosts');
 
@@ -121,8 +126,15 @@ export class ConfigStore {
     try {
       saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
     } catch {}
+    // v2: faults are manual by default and stay until switched off. Older saved files carry the
+    // previous defaults, so those two values are reset once (later changes are respected).
+    if ((saved.configVersion ?? 1) < 2) {
+      if (saved.sim) delete saved.sim.randomFaults;
+      if (saved.realism) delete saved.realism.techsRepairManual;
+    }
     // The env token always wins if the saved one is empty (first deploy with token in Dokploy).
     const { config } = applyPatch(this.defaults, saved);
+    config.configVersion = CONFIG_VERSION;
     if (!config.zabbix.apiToken && this.defaults.zabbix.apiToken) config.zabbix.apiToken = this.defaults.zabbix.apiToken;
     this.config = config;
   }

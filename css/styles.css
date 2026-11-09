@@ -293,3 +293,7 @@ button.icon:hover { color: var(--text); background: var(--panel-2); }
 /* Zabbix CEP groups in the problems feed */
 .feed-sub { font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted, #9aa4b2); padding: 8px 10px 4px; }
 .ev.cep b { font-weight: 650; }
+
+/* Monitoring room button */
+.controls button.monitor { border-color: rgba(214, 78, 78, 0.55); }
+.controls button.monitor.active { background: rgba(214, 78, 78, 0.28); color: #fff; }

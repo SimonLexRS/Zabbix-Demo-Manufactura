@@ -10,7 +10,7 @@ import { mergeFrame } from './sim/frames.js';
 import { UI } from './ui/ui.js';
 import { ConfigPanel } from './ui/config-panel.js';
 import { PixelRenderer, loadAppearance, saveAppearance } from './world/pixel.js';
-import { STORAGES, OIL_TANKS, BUILDINGS, STATIONS, BOILERS } from './sim/layout.js';
+import { STORAGES, OIL_TANKS, BUILDINGS, STATIONS, BOILERS, MONITOR_ROOM } from './sim/layout.js';
 import { PROBLEM_BY_ID } from './sim/problems.js';
 
 const container = document.getElementById('scene');
@@ -55,8 +55,11 @@ const ui = new UI({
   onSpeed: (v) => source?.control({ speed: v }),
   onTour: (t) => {
     follow = null;
+    if (t.monitor) return enterMonitor();
+    setMonitor(false);
     flyTo(new THREE.Vector3(...t.target), t.dist);
   },
+  onMonitor: () => (plant.monitorMode ? (setMonitor(false), flyTo(HOME.target.clone(), null, HOME.pos.clone())) : enterMonitor()),
   onProblem: (id, active) => setProblem(id, active),
   onRandomFaults: async (on) => {
     await source?.problems({ randomFaults: on });
@@ -74,6 +77,7 @@ const ui = new UI({
   onLabels: (on) => plant.setLabelsVisible(on),
   onHome: () => {
     follow = null;
+    setMonitor(false);
     flyTo(HOME.target.clone(), null, HOME.pos.clone());
   },
   onSelect: (pick) => select(pick),
@@ -172,7 +176,42 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   renderer.domElement.style.cursor = hit ? 'pointer' : 'grab';
 });
 
+// ───────────── monitoring room ─────────────
+// Entering the room (button, tour stop, or flying the camera into it) tells the server someone
+// is watching: the plant manager comes to the room right away and stays at the dashboard.
+function enterMonitor() {
+  follow = null;
+  select(null);
+  setMonitor(true);
+  const v = MONITOR_ROOM.view;
+  flyTo(new THREE.Vector3(...v.target), null, new THREE.Vector3(...v.pos));
+  ui.toast('Sala de monitoreo · clic en el muro para abrir el dashboard real en Zabbix');
+}
+function setMonitor(on) {
+  plant.monitorMode = on;
+  // Inside the room the camera may look horizontally and get close.
+  controls.maxPolarAngle = on ? Math.PI * 0.5 : Math.PI * 0.47;
+  controls.minDistance = on ? 3 : 12;
+  ui.setMonitor(on);
+  if (on) source?.presence?.();
+}
+const cameraInRoom = () => {
+  const c = camera.position;
+  return Math.abs(c.x - MONITOR_ROOM.x) < MONITOR_ROOM.w / 2 + 6 && Math.abs(c.z - MONITOR_ROOM.z) < MONITOR_ROOM.d / 2 + 8 && c.y < 14;
+};
+setInterval(() => {
+  // Leaving by moving the camera away ends the visit.
+  if (plant.monitorMode && !fly && Math.hypot(camera.position.x - MONITOR_ROOM.x, camera.position.z - MONITOR_ROOM.z) > 60) setMonitor(false);
+  if (plant.monitorMode || cameraInRoom()) source?.presence?.();
+}, 8000);
+function openDashboard() {
+  const url = state?.zabbix?.dashboardUrl;
+  if (url) window.open(url, '_blank', 'noopener');
+  else ui.toast('Configura la URL web de Zabbix (Configuración → Zabbix) para abrir el dashboard real');
+}
+
 function select(pick) {
+  if (pick?.kind === 'dashboard') return openDashboard();
   if (pick && config?.isOpen) config.close();
   plant.select(pick);
   ui.showDetails(pick);
@@ -232,8 +271,9 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+plant.camera = camera;
 const clock = new THREE.Clock();
-function frame() {
+function step() {
   const raw = clock.getDelta();
   const dt = Math.min(0.1, raw);
   snaps.advance(Math.min(raw, 1));
@@ -268,6 +308,14 @@ function frame() {
   pixel.render();
   labelRenderer.render(scene, camera);
   plant.declutter(camera, viewW, viewH);
+}
+function frame() {
+  step();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// Debug hook (only with ?debug in the URL): drive frames by hand, e.g. in a background tab.
+if (new URLSearchParams(location.search).has('debug')) {
+  window.__planta = { camera, controls, plant, state: () => state, step: (n = 1) => { for (let i = 0; i < n; i++) step(); }, enterMonitor, flyTo };
+}
