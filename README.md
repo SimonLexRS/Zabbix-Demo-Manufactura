@@ -1,6 +1,6 @@
 # Zabbix Demo Manufactura — Planta Aceitera 3D
 
-Gemelo digital 3D (Three.js) de una planta de **acopio y molienda de soya**: recepción de camiones por RN4, calado, pesaje, volcadoras, norias, silos y galpones, preparación, **extracción por hexano**, **sala de fuerza** (calderas/vapor), tanques de aceite, galpón de harina y despacho.
+Gemelo digital 3D en estilo **pixel art** (Three.js) de una planta de **acopio y molienda de soya**: recepción de camiones por RN4, calado, pesaje, volcadoras, norias, silos y galpones, preparación, **extracción por hexano**, **sala de fuerza** (calderas/vapor), tanques de aceite, galpón de harina y despacho.
 
 La simulación corre en el **servidor** y expone **métricas para Zabbix** (HTTP agent + LLD) y Prometheus. El navegador solo dibuja el estado en vivo.
 
@@ -48,11 +48,13 @@ flowchart LR
 | `GET/POST /api/problems` | Puntos problemáticos (ver abajo) |
 | `/api/zabbix/status` | Estado del envío con Zabbix sender y del alta automática |
 | `POST /api/control` | `{"speed":5}` |
+| `GET/PUT /api/config` | Configuración del panel (sin secretos en el GET) |
+| `POST /api/zabbix/{test,provision,send-now,correlation}` | Acciones del panel |
 | `/healthz` | Health check |
 
 ## Problemas: manuales y aleatorios
 
-Botón **Problemas** en la vista 3D (o el panel de cada equipo) con un interruptor por punto problemático:
+Botón **Fallas** en la vista 3D (o el panel de cada equipo) con un interruptor por punto problemático:
 
 | id | Problema | Efecto | Severidad |
 |---|---|---|---|
@@ -74,6 +76,17 @@ Botón **Problemas** en la vista 3D (o el panel de cada equipo) con un interrupt
 
 API: `GET /api/problems`, `POST /api/problems` con `{"id":"bal_in_net","active":true}`, `{"randomFaults":false}` o `{"clearAll":true}`.
 
+## Panel de configuración (Zabbix · IoT · CEP · Apariencia)
+
+Botón **Configuración** en la barra inferior. Los cambios se aplican en caliente (sin redeploy) y se guardan en el servidor (`DATA_DIR/config.json`, volumen `planta-data`). Cambiar algo pide la **clave de administrador** (`CONTROL_TOKEN`) una vez por navegador; sin ella se puede mirar la planta pero no cambiar fallas ni configuración.
+
+- **Zabbix**: activar el envío, servidor/puerto trapper, host, grupo, intervalos de envío y de LLD, URL y token de la API (el token nunca se devuelve al navegador), `{$TRAPPER.ALLOWED_HOSTS}`. Botones **Probar conexión** (trapper + API + token), **Re-provisionar** y **Enviar ahora**, con el estado de cada envío.
+- **IoT**: 15 dispositivos simulados (termometría de silos S1–S7, radares de nivel TA1–TA3, caudalímetro de aceite, medidores de energía de preparación y sala de fuerza, detector de gas LEL/O₂, estación meteorológica). Cada uno es un **host propio** en Zabbix (`iot-<id>`, grupo `Manufactura/IoT`) con el template **Planta Aceitera IoT device by Zabbix sender**: conexión, batería, RSSI, uptime y sus lecturas por LLD (`iot.metric[...]`). Por dispositivo: habilitar, intervalo, ruido, **Sin conexión** (dispara `nodata`) y **Batería baja**. Con fallas aleatorias activas también hay cortes de radio aleatorios.
+- **CEP** (correlación de eventos):
+  - **Motor en la app**: reglas "A y B dentro de N minutos" (o "A o B") sobre fallas y métricas. Incluye 5 reglas (red de balanza → camión detenido, pérdida de vapor → molienda, riesgo de seguridad en extracción, cuello de botella en recepción, calidad de grano) y un editor para crear, ajustar ventana/severidad, desactivar o borrar reglas. Cada regla llega a Zabbix como `planta.cep.active[<regla>]` (0 inactiva, 1–5 severidad) con su trigger, más `planta.cep.last_event`.
+  - **En Zabbix**: el template sender trae **dependencias de triggers** (p. ej. "camión detenido" depende de "caída de red en balanza"; "molienda < 70 %" de "presión de vapor baja", que depende de los disparos de caldera) y tags `scope` + `rootcause`/`symptom`. Desde el panel se crea la **correlación global** *"Planta Aceitera: la causa raíz cierra los síntomas"* (requiere token Super admin).
+- **Apariencia**: modo **pixel art** (render pixelado con contornos) y tamaño de píxel; se guarda por navegador.
+
 ## Envío a Zabbix con Zabbix sender (push)
 
 Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 s)** todos los datos de estado y cantidad (≈170 valores: planta, silos, tanques, calderas, estaciones y problemas) a los **ítems trapper** del host `ZABBIX_HOST`, con el protocolo nativo de Zabbix sender (TCP 10051, cabecera `ZBXD`). Las reglas LLD se envían al arrancar y cada 10 min. Al cambiar un problema se envía al instante. El estado del envío (`processed` / `failed`) se ve en la vista 3D y en `GET /api/zabbix/status`.
@@ -94,7 +107,9 @@ Con `ZABBIX_SERVER` definido, la app envía **cada `ZABBIX_SEND_INTERVAL` s (10 
 | `ZABBIX_NETWORK` | `zabbix-testing-lab01-mybwkj_default` | Red Docker del stack de Zabbix (solo compose) |
 | `RANDOM_FAULTS` | `1` | `0` = solo fallas manuales |
 | `SIM_SPEED` | `1` | 1 min simulado por segundo |
-| `CONTROL_TOKEN` | — | Si se define, los POST exigen `x-control-token` |
+| `CONTROL_TOKEN` | — | Clave de administrador: si se define, los POST/PUT (fallas, configuración) exigen `x-control-token` |
+| `DATA_DIR` | `/app/data` | Dónde se guarda la configuración del panel |
+| `IOT_ENABLED` | `1` | `0` = no enviar dispositivos IoT |
 
 ## Despliegue en Dokploy (Compose, junto al stack de Zabbix)
 

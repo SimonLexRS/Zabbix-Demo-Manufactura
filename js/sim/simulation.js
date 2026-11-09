@@ -10,6 +10,8 @@
 import { GRID_BOUNDS, ROADS, SITE, STATIONS, SPAWN, YARD_SLOTS, STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS } from './layout.js';
 import { Grid, offsetRight } from './grid.js';
 import { PROBLEMS, PROBLEM_BY_ID, PLC_EXT_FIELDS } from './problems.js';
+import { IoTFleet } from './iot.js';
+import { CepEngine } from './cep.js';
 
 export const SEVERITY = ['Información', 'Advertencia', 'Promedio', 'Alta', 'Desastre'];
 export const NOMINAL_CRUSH = 1.05; // t/min ≈ 1500 t/day
@@ -79,6 +81,8 @@ export class Simulation {
       mealHumidity: 12.1, oilRate: 0, mealRate: 0, power: 2.4, extractorRun: true,
     };
     this.active = new Map();
+    this.iot = new IoTFleet();
+    this.cep = new CepEngine();
     this.randomFaults = !!randomFaults;
     this.counters = this.freshCounters();
     this.roadQueue = 0;
@@ -107,6 +111,7 @@ export class Simulation {
       this.step(dt);
       left -= dt;
     }
+    if (minutes > 0) this.evalCep();
     this.tick++;
   }
 
@@ -122,6 +127,7 @@ export class Simulation {
     this.flows = { H1: false, H2: false, OL: false, ML: false };
     this.updateSpawns();
     this.updateFaults();
+    this.iot.step(this, dt);
     this.updateProcess(dt);
     for (const v of this.vehicles) this.updateTruck(v, dt);
     this.vehicles = this.vehicles.filter((v) => !v.gone);
@@ -712,6 +718,8 @@ export class Simulation {
       faults: [...this.active.keys()].map((id) => ({ type: PROBLEM_BY_ID[id].effect.type, target: PROBLEM_BY_ID[id].effect.target })),
       problemCatalog: this.problemStates(),
       randomFaults: this.randomFaults,
+      iot: { enabled: this.iot.enabled, devices: this.iot.summary(this) },
+      cep: this.cep.summary((t) => this.clock(t).label),
       kpi: Object.fromEntries(Object.entries(this.kpis()).map(([k, v]) => [k, r1(v)])),
       problems: [...this.problems.values()].map((p) => ({ ...p, since: this.clock(p.since).label, durMin: Math.round(this.t - p.since) })),
       events: this.events.slice(0, 40).map((e) => ({ ...e, time: this.clock(e.t).label })),
@@ -776,22 +784,18 @@ export class Simulation {
     });
   }
 
-  // Flat list of {key, value} for Zabbix sender (trapper items).
-  senderItems() {
+  // Every numeric plant key the app knows (what Zabbix would see with a healthy PLC).
+  flatMetrics() {
     const m = this.metrics();
-    const plcDown = this.hasFault('plc_comm', 'EXT');
     const out = [
       { key: 'planta.sim_minutes', value: m.sim_minutes },
       { key: 'planta.speed', value: m.speed },
       { key: 'planta.random_faults', value: m.random_faults },
     ];
-    for (const [f, v] of Object.entries(m.plant)) {
-      if (plcDown && PLC_EXT_FIELDS.includes(f)) continue;
-      out.push({ key: `planta.${f}`, value: v });
-    }
-    const group = (prefix, objs, skip = []) => {
+    for (const [f, v] of Object.entries(m.plant)) out.push({ key: `planta.${f}`, value: v, field: f });
+    const group = (prefix, objs) => {
       for (const [id, fields] of Object.entries(objs))
-        for (const [f, v] of Object.entries(fields)) if (typeof v === 'number' && !skip.includes(f)) out.push({ key: `planta.${prefix}.${f}[${id}]`, value: v });
+        for (const [f, v] of Object.entries(fields)) if (typeof v === 'number') out.push({ key: `planta.${prefix}.${f}[${id}]`, value: v });
     };
     group('silo', m.silos);
     group('tank', m.tanks);
@@ -801,10 +805,29 @@ export class Simulation {
     return out;
   }
 
-  // LLD payloads: key → JSON array.
+  // Flat list of {key, value} for Zabbix sender (trapper items) of the plant host.
+  senderItems() {
+    const plcDown = this.hasFault('plc_comm', 'EXT');
+    const out = this.flatMetrics()
+      .filter((i) => !(plcDown && i.field && PLC_EXT_FIELDS.includes(i.field)))
+      .map(({ key, value }) => ({ key, value }));
+    if (this.cep) out.push(...this.cep.senderItems((t) => this.clock(t).label));
+    return out;
+  }
+
+  // LLD payloads of the plant host: key → JSON array.
   discoveryData() {
     const d = this.metrics().discovery;
-    return Object.entries(d).map(([k, v]) => ({ key: `planta.${k}.discovery`, value: JSON.stringify(v) }));
+    const out = Object.entries(d).map(([k, v]) => ({ key: `planta.${k}.discovery`, value: JSON.stringify(v) }));
+    if (this.cep) out.push({ key: 'planta.cep.discovery', value: JSON.stringify(this.cep.discovery()) });
+    return out;
+  }
+
+  evalCep() {
+    if (!this.cep) return;
+    const metrics = {};
+    for (const i of this.flatMetrics()) metrics[i.key] = i.value;
+    this.cep.evaluate(this, { t: this.t, problems: new Set(this.active.keys()), metrics });
   }
 
   control(cmd = {}) {

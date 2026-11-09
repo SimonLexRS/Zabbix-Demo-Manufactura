@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Planta Aceitera 3D · Demo Zabbix</title>
-    <meta name="description" content="Gemelo digital 3D de una planta de acopio y molienda de soya (Three.js) con simulación en vivo y métricas para Zabbix." />
+    <meta name="description" content="Gemelo digital pixel art de una planta de acopio y molienda de soya (Three.js) con simulación en vivo, IoT, CEP y envío a Zabbix." />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600;700&family=VT323&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/styles.css" />
     <script type="importmap">
       {
@@ -24,7 +24,10 @@
 
     <header class="topbar">
       <div class="brand">
-        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c5 6 8 10.5 8 15a8 8 0 1 1-16 0c0-4.5 3-9 8-15z" fill="#f2b632"/><path d="M12.5 19.5a4 4 0 0 0 4 3.5" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <svg class="logo" viewBox="0 0 16 16" aria-hidden="true" shape-rendering="crispEdges">
+          <rect x="7" y="1" width="2" height="2" fill="#f7c948" /><rect x="6" y="3" width="4" height="2" fill="#f7c948" /><rect x="5" y="5" width="6" height="2" fill="#f7c948" />
+          <rect x="4" y="7" width="8" height="5" fill="#f2a516" /><rect x="5" y="12" width="6" height="2" fill="#d98a0b" /><rect x="5" y="8" width="2" height="3" fill="#fff6c9" />
+        </svg>
         <div>
           <h1>Planta Aceitera · Acopio y Molienda</h1>
           <p><span id="clock">—</span> · <span id="mode" class="mode">Conectando…</span></p>
@@ -41,7 +44,7 @@
           <button class="active" data-tab="problems">Problemas <span id="probCount" class="count">0</span></button>
           <button data-tab="events">Eventos</button>
         </div>
-        <button id="feedToggle" class="icon" title="Mostrar/ocultar">▾</button>
+        <button id="feedToggle" class="icon" title="Mostrar/ocultar" aria-label="Mostrar u ocultar">▾</button>
       </div>
       <div id="feedList" class="feed-list"></div>
     </aside>
@@ -53,7 +56,7 @@
           <h2 id="detailsTitle"></h2>
           <p id="detailsSub"></p>
         </div>
-        <button id="detailsClose" class="icon" title="Cerrar">✕</button>
+        <button id="detailsClose" class="icon" title="Cerrar" aria-label="Cerrar">✕</button>
       </div>
       <span id="detailsStatus" class="status"></span>
       <div class="chart-wrap hidden">
@@ -67,21 +70,59 @@
       <div id="detailsActions" class="actions"></div>
     </aside>
 
+    <!-- Popups of the bottom bar (positioned above their button by ui.js) -->
+    <div id="tourList" class="menu-pop" role="dialog" aria-label="Recorrido del proceso">
+      <div class="pop-head"><b>Recorrido del proceso</b><button class="icon pop-close" aria-label="Cerrar">✕</button></div>
+      <div id="tourItems" class="pop-body"></div>
+    </div>
+    <div id="faultList" class="menu-pop problems-pop" role="dialog" aria-label="Fallas">
+      <div class="pop-head">
+        <b>Fallas activables</b>
+        <button id="randomToggle" class="switch-row" type="button"><span>Aleatorias</span><i class="switch"></i></button>
+        <button class="icon pop-close" aria-label="Cerrar">✕</button>
+      </div>
+      <div id="faultItems" class="pop-body"></div>
+    </div>
+
     <nav class="controls" aria-label="Controles">
       <div id="speeds" class="seg" title="Velocidad de simulación"></div>
-      <div class="menu">
-        <button data-menu="tourList">Recorrido del proceso</button>
-        <div id="tourList" class="menu-pop"></div>
-      </div>
-      <div class="menu">
-        <button id="btnProblems" data-menu="faultList" class="danger">Problemas</button>
-        <div id="faultList" class="menu-pop problems-pop"></div>
-      </div>
-      <button id="btnLabels" class="active" title="Etiquetas">Etiquetas</button>
+      <button data-menu="tourList">Recorrido</button>
+      <button id="btnProblems" data-menu="faultList" class="danger">Fallas</button>
+      <button id="btnConfig" class="cfg">Configuración</button>
+      <button id="btnLabels" class="active" title="Mostrar etiquetas">Etiquetas</button>
       <button id="btnHome" title="Vista general">Vista general</button>
     </nav>
 
-    <div class="hint">Arrastra para rotar · clic derecho para desplazar · rueda para zoom · clic en un equipo, camión u operario</div>
+    <!-- Configuration drawer (Zabbix · IoT · CEP · Apariencia) -->
+    <aside id="config" class="panel drawer hidden" aria-label="Configuración">
+      <div class="drawer-head">
+        <b>Configuración</b>
+        <button id="configClose" class="icon" aria-label="Cerrar">✕</button>
+      </div>
+      <div class="tabs" role="tablist">
+        <button data-cfg="zabbix" class="active">Zabbix</button>
+        <button data-cfg="iot">IoT</button>
+        <button data-cfg="cep">CEP</button>
+        <button data-cfg="look">Apariencia</button>
+      </div>
+      <div id="configBody" class="drawer-body"></div>
+    </aside>
+
+    <!-- Admin key modal -->
+    <div id="authModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+      <form class="panel modal-box" id="authForm">
+        <b id="authTitle">Clave de administrador</b>
+        <p>Para cambiar fallas o configuración ingresa la clave (<code>CONTROL_TOKEN</code>). Se guarda solo en este navegador.</p>
+        <input id="authInput" type="password" autocomplete="current-password" placeholder="Clave" />
+        <p id="authError" class="err"></p>
+        <div class="row-actions">
+          <button type="button" id="authCancel">Cancelar</button>
+          <button type="submit" class="primary">Entrar</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="hint" id="hint">Arrastra para rotar · clic derecho para desplazar · rueda para zoom · clic en un equipo, camión u operario</div>
     <div id="toast" class="toast"></div>
 
     <script type="module" src="js/main.js"></script>

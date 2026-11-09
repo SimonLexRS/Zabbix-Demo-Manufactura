@@ -12,6 +12,8 @@ services:
       SIM_SPEED: ${SIM_SPEED:-1}
       RANDOM_FAULTS: ${RANDOM_FAULTS:-1}
       CONTROL_TOKEN: ${CONTROL_TOKEN:-}
+      DATA_DIR: /app/data
+      IOT_ENABLED: ${IOT_ENABLED:-1}
       ZABBIX_SERVER: ${ZABBIX_SERVER:-zabbix-server}
       ZABBIX_PORT: ${ZABBIX_PORT:-10051}
       ZABBIX_HOST: ${ZABBIX_HOST:-Planta Aceitera}
@@ -21,9 +23,14 @@ services:
       ZABBIX_API_TOKEN: ${ZABBIX_API_TOKEN:-}
     expose:
       - "8080"
+    volumes:
+      - planta-data:/app/data
     networks:
       - default
       - zabbix
+
+volumes:
+  planta-data:
 
 networks:
   zabbix:

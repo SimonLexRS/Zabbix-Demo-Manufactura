@@ -1,0 +1,129 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 'd30d9b0ccb39427aaf23c3a6060136c1'
+      name: 'Templates/Manufacturing'
+  templates:
+    - uuid: '3fd2e64dc45d424db1d93d0fe51fa27d'
+      template: 'Planta Aceitera IoT device by Zabbix sender'
+      name: 'Planta Aceitera IoT device by Zabbix sender'
+      description: 'Dispositivo IoT simulado de la planta aceitera (termometría, radar, caudalímetro, energía, gas, meteorología). Reporta por Zabbix sender; sus lecturas se descubren con LLD.'
+      groups:
+        - name: 'Templates/Manufacturing'
+      items:
+        - uuid: 'bfc610e0b0634818964fbb257ee07692'
+          name: 'Conectado'
+          type: 'TRAP'
+          key: 'iot.online'
+          value_type: 'UNSIGNED'
+          valuemap:
+            name: 'IoT conectado'
+          tags:
+            - tag: 'component'
+              value: 'salud'
+          triggers:
+            - uuid: 'a9ce23d5ee3b4d34b4f30eba5b99cebe'
+              expression: 'nodata(/Planta Aceitera IoT device by Zabbix sender/iot.online,{$IOT.NODATA})=1'
+              name: '{HOST.NAME}: sin conexión'
+              priority: 'AVERAGE'
+              description: 'El dispositivo dejó de reportar (sin radio, sin energía o deshabilitado).'
+              tags:
+                - tag: 'scope'
+                  value: 'iot'
+                - tag: 'rootcause'
+                  value: 'yes'
+        - uuid: 'd8893ce663f446218ba2064f941d15a7'
+          name: 'Batería'
+          type: 'TRAP'
+          key: 'iot.battery_pct'
+          value_type: 'FLOAT'
+          units: '%'
+          tags:
+            - tag: 'component'
+              value: 'salud'
+          triggers:
+            - uuid: '3965e10d7fc047a9b4634f425e53dfaa'
+              expression: 'last(/Planta Aceitera IoT device by Zabbix sender/iot.battery_pct)<{$IOT.BATTERY.MIN}'
+              name: '{HOST.NAME}: batería baja (< {$IOT.BATTERY.MIN}%)'
+              priority: 'WARNING'
+              dependencies:
+                - name: '{HOST.NAME}: sin conexión'
+                  expression: 'nodata(/Planta Aceitera IoT device by Zabbix sender/iot.online,{$IOT.NODATA})=1'
+              tags:
+                - tag: 'scope'
+                  value: 'iot'
+                - tag: 'symptom'
+                  value: 'yes'
+        - uuid: 'a11f7de878b24981bc745d7974f8e57b'
+          name: 'Señal de radio (RSSI)'
+          type: 'TRAP'
+          key: 'iot.rssi_dbm'
+          value_type: 'FLOAT'
+          units: 'dBm'
+          tags:
+            - tag: 'component'
+              value: 'salud'
+          triggers:
+            - uuid: 'afe607a5866840768fd2fc1145c531c2'
+              expression: 'max(/Planta Aceitera IoT device by Zabbix sender/iot.rssi_dbm,5m)<{$IOT.RSSI.MIN}'
+              name: '{HOST.NAME}: señal débil (< {$IOT.RSSI.MIN} dBm)'
+              priority: 'WARNING'
+              dependencies:
+                - name: '{HOST.NAME}: sin conexión'
+                  expression: 'nodata(/Planta Aceitera IoT device by Zabbix sender/iot.online,{$IOT.NODATA})=1'
+              tags:
+                - tag: 'scope'
+                  value: 'iot'
+                - tag: 'symptom'
+                  value: 'yes'
+        - uuid: 'c25a845907484c8b9dceedb0e174d681'
+          name: 'Tiempo encendido'
+          type: 'TRAP'
+          key: 'iot.uptime'
+          value_type: 'UNSIGNED'
+          units: 'uptime'
+          tags:
+            - tag: 'component'
+              value: 'salud'
+      discovery_rules:
+        - uuid: 'cff53604396941499166b37836f7f1b0'
+          name: 'Lecturas del dispositivo'
+          type: 'TRAP'
+          key: 'iot.metrics.discovery'
+          item_prototypes:
+            - uuid: 'e20e4c358bce45bcb105a21679ef23c4'
+              name: '{#LABEL}'
+              type: 'TRAP'
+              key: 'iot.metric[{#METRIC}]'
+              value_type: 'FLOAT'
+              tags:
+                - tag: 'component'
+                  value: 'lectura'
+                - tag: 'metric'
+                  value: '{#METRIC}'
+      tags:
+        - tag: 'class'
+          value: 'iot'
+        - tag: 'target'
+          value: 'planta-aceitera'
+      macros:
+        - macro: '{$TRAPPER.ALLOWED_HOSTS}'
+          value: '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1,::1'
+          description: 'Orígenes permitidos para los ítems trapper (Zabbix sender). Redes privadas de Docker por defecto.'
+        - macro: '{$IOT.NODATA}'
+          value: '3m'
+          description: 'Tiempo sin reportes antes de considerar el dispositivo sin conexión.'
+        - macro: '{$IOT.BATTERY.MIN}'
+          value: '15'
+          description: 'Batería mínima (%).'
+        - macro: '{$IOT.RSSI.MIN}'
+          value: '-95'
+          description: 'Señal mínima (dBm).'
+      valuemaps:
+        - uuid: '50615f758f9045119d2c64952a09dd3a'
+          name: 'IoT conectado'
+          mappings:
+            - value: '0'
+              newvalue: 'Desconectado'
+            - value: '1'
+              newvalue: 'Conectado'

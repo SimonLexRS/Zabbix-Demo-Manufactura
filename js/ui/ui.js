@@ -15,6 +15,7 @@ export class UI {
     this.feedTab = 'problems';
     this.feedSig = '';
     this.selected = null;
+    this.openPop = null;
     this.buildControls();
   }
 
@@ -36,7 +37,7 @@ export class UI {
       b.onclick = () => this.h.onSpeed(v);
       sp.appendChild(b);
     }
-    const tour = $('#tourList');
+    const tour = $('#tourItems');
     for (const t of TOUR) {
       const b = document.createElement('button');
       b.className = 'menu-item';
@@ -47,33 +48,49 @@ export class UI {
       };
       tour.appendChild(b);
     }
-    // Problem panel: rendered from the live catalog in each snapshot.
-    const pl = $('#faultList');
-    pl.addEventListener('click', (e) => {
-      e.stopPropagation();
+    // Fault panel rows (rendered from the live catalog in each snapshot).
+    $('#faultItems').addEventListener('click', (e) => {
       const row = e.target.closest('[data-problem]');
       if (row) this.h.onProblem(row.dataset.problem, row.dataset.state === '0');
-      if (e.target.closest('#randomToggle')) this.h.onRandomFaults(!this.last?.randomFaults);
       if (e.target.closest('#clearProblems')) this.h.onClearProblems();
     });
+    $('#randomToggle').onclick = () => this.h.onRandomFaults(!this.last?.randomFaults);
 
+    // Bottom-bar popups: the same button toggles, only one open at a time,
+    // closed by ✕, Esc or any pointer press outside (the 3D canvas included).
     for (const btn of document.querySelectorAll('[data-menu]')) {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        const m = document.getElementById(btn.dataset.menu);
-        const open = !m.classList.contains('open');
+      btn.onclick = () => {
+        const pop = document.getElementById(btn.dataset.menu);
+        const wasOpen = this.openPop === pop;
         this.closeMenus();
-        if (open) m.classList.add('open');
+        if (!wasOpen) this.openMenu(btn, pop);
       };
     }
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('.menu')) this.closeMenus();
+    for (const x of document.querySelectorAll('.pop-close')) x.onclick = () => this.closeMenus();
+    document.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (this.openPop && !e.target.closest('.menu-pop') && !e.target.closest('[data-menu]')) this.closeMenus();
+      },
+      true,
+    );
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (!$('#authModal').classList.contains('hidden')) return;
+      if (this.openPop) this.closeMenus();
+      else this.h.onEscape?.();
     });
+    window.addEventListener('resize', () => this.openPop && this.positionPop());
+
     $('#btnLabels').onclick = (e) => {
       const on = e.currentTarget.classList.toggle('active');
       this.h.onLabels(on);
     };
     $('#btnHome').onclick = () => this.h.onHome();
+    $('#btnConfig').onclick = () => {
+      this.closeMenus();
+      this.h.onConfig();
+    };
     $('#detailsClose').onclick = () => this.h.onSelect(null);
     for (const t of document.querySelectorAll('.feed-tabs button')) {
       t.onclick = () => {
@@ -84,10 +101,65 @@ export class UI {
       };
     }
     $('#feedToggle').onclick = () => $('#feed').classList.toggle('collapsed');
+    if (window.innerWidth < 1280) $('#feed').classList.add('collapsed');
+    // The navigation hint fades after a while (and whenever a popup opens).
+    setTimeout(() => $('#hint').classList.add('gone'), 14000);
+    this.buildAuthModal();
+  }
+
+  openMenu(btn, pop) {
+    this.openPop = pop;
+    this.openBtn = btn;
+    pop.classList.add('open');
+    btn.classList.add('open');
+    $('#hint').classList.add('gone');
+    this.positionPop();
+  }
+
+  // Anchor the popup above its button, kept inside the viewport.
+  positionPop() {
+    const pop = this.openPop;
+    const r = this.openBtn.getBoundingClientRect();
+    const w = pop.offsetWidth;
+    const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+    pop.style.left = `${left}px`;
+    pop.style.bottom = `${window.innerHeight - r.top + 10}px`;
+    pop.style.maxHeight = `${Math.max(160, r.top - 24)}px`;
   }
 
   closeMenus() {
-    document.querySelectorAll('.menu.open').forEach((m) => m.classList.remove('open'));
+    document.querySelectorAll('.menu-pop.open').forEach((m) => m.classList.remove('open'));
+    document.querySelectorAll('[data-menu].open').forEach((b) => b.classList.remove('open'));
+    this.openPop = null;
+    this.openBtn = null;
+  }
+
+  // Admin key modal: resolves with the typed key, or null if cancelled.
+  buildAuthModal() {
+    const modal = $('#authModal');
+    const input = $('#authInput');
+    const finish = (v) => {
+      modal.classList.add('hidden');
+      const r = this.authResolve;
+      this.authResolve = null;
+      r?.(v);
+    };
+    $('#authForm').onsubmit = (e) => {
+      e.preventDefault();
+      if (input.value.trim()) finish(input.value.trim());
+    };
+    $('#authCancel').onclick = () => finish(null);
+    modal.addEventListener('keydown', (e) => e.key === 'Escape' && finish(null));
+  }
+
+  askToken(errorMsg = '') {
+    return new Promise((resolve) => {
+      this.authResolve = resolve;
+      $('#authError').textContent = errorMsg;
+      $('#authInput').value = '';
+      $('#authModal').classList.remove('hidden');
+      setTimeout(() => $('#authInput').focus(), 30);
+    });
   }
 
   setMode({ mode }) {
@@ -101,7 +173,7 @@ export class UI {
     t.textContent = msg;
     t.classList.add('show');
     clearTimeout(this.toastT);
-    this.toastT = setTimeout(() => t.classList.remove('show'), 2600);
+    this.toastT = setTimeout(() => t.classList.remove('show'), 2800);
   }
 
   // ───────────── per snapshot ─────────────
@@ -117,30 +189,25 @@ export class UI {
     if (this.selected) this.renderDetails(this.selected, s);
   }
 
-  // Problem points: switch per problem (manual = stays until switched off).
+  // Fault points: switch per problem (manual = stays until switched off).
   renderProblems(s) {
     const cat = s.problemCatalog || [];
     const active = cat.filter((p) => p.state > 0).length;
-    const label = `Problemas${active ? ` <span class="count on">${active}</span>` : ''}`;
+    const label = `Fallas${active ? ` <span class="count on">${active}</span>` : ''}`;
     const btn = $('#btnProblems');
     if (btn.innerHTML !== label) btn.innerHTML = label;
-    const list = $('#faultList');
+    const list = $('#faultItems');
     // Build the rows once; afterwards only update them in place so clicks are never lost.
     const ids = cat.map((p) => p.id).join(',');
     if (list.dataset.ids !== ids) {
       list.dataset.ids = ids;
-      list.innerHTML = `
-        <div class="pp-head">
-          <b>Puntos problemáticos</b>
-          <button id="randomToggle" class="switch-row" type="button"><span>Fallas aleatorias</span><i class="switch"></i></button>
-        </div>
-        ${cat
-          .map(
-            (p) => `<button type="button" class="pp sev-${SEV_CLASS[p.sev]}" data-problem="${p.id}" data-state="0" title="${esc(p.desc)}">
-              <i class="dot"></i><span class="pp-txt"><b>${esc(p.name)}</b><small></small></span><i class="switch"></i></button>`,
-          )
-          .join('')}
-        <button id="clearProblems" type="button" class="menu-item ok"><b>Desactivar todos</b><span>Normaliza manuales y aleatorias</span></button>`;
+      list.innerHTML = `${cat
+        .map(
+          (p) => `<button type="button" class="pp sev-${SEV_CLASS[p.sev]}" data-problem="${p.id}" data-state="0" title="${esc(p.desc)}">
+            <i class="dot"></i><span class="pp-txt"><b>${esc(p.name)}</b><small></small></span><i class="switch"></i></button>`,
+        )
+        .join('')}
+        <button id="clearProblems" type="button" class="menu-item ok"><b>Desactivar todas</b><span>Normaliza manuales y aleatorias</span></button>`;
     }
     const rnd = $('#randomToggle');
     rnd.setAttribute('aria-pressed', String(!!s.randomFaults));
@@ -175,13 +242,14 @@ export class UI {
       txt = `Zabbix sender: ${l.error}`;
     } else if (l) {
       const ago = Math.max(0, Math.round((Date.now() - Date.parse(l.at)) / 1000));
-      cls += l.failed > 0 ? ' warn' : ' ok';
-      txt = `Zabbix sender · ${l.processed} procesados · ${l.failed} fallidos · hace ${ago} s`;
+      const iotFailed = z.iot?.failed ?? 0;
+      cls += l.failed > 0 || iotFailed > 0 || z.iot?.error ? ' warn' : ' ok';
+      txt = `Zabbix · ${l.processed} ok · ${l.failed} fallidos${z.iot ? ` · IoT ${z.iot.devices} disp.` : ''} · hace ${ago} s`;
     }
-    if (z.provision === 'error') txt += ' · alta en Zabbix con error';
+    if (z.provision === 'error') txt += ' · alta con error';
     el.className = cls;
     el.textContent = txt;
-    el.title = `Host "${z.host}" en ${z.server}. Alta automática: ${z.provision}`;
+    el.title = `Host "${z.host}" en ${z.server}. Alta automática: ${z.provision}. Correlación: ${z.correlation}.${z.iot ? ` IoT: ${z.iot.processed} ok / ${z.iot.failed} fallidos.` : ''}`;
   }
 
   recordHistory(s) {
@@ -239,7 +307,7 @@ export class UI {
     const list = $('#feedList');
     if (this.feedTab === 'problems') {
       if (!s.problems.length) {
-        list.innerHTML = '<div class="empty">Sin problemas activos. Usa <b>Problemas</b> para activar fallas y probar los triggers de Zabbix.</div>';
+        list.innerHTML = '<div class="empty">Sin problemas activos. Usa <b>Fallas</b> para activar fallas y probar los triggers de Zabbix.</div>';
         return;
       }
       list.innerHTML = [...s.problems]

@@ -5,7 +5,8 @@ FROM node:20-alpine
 ENV NODE_ENV=production \
     PORT=8080 \
     SIM_SPEED=1 \
-    RANDOM_FAULTS=1
+    RANDOM_FAULTS=1 \
+    DATA_DIR=/app/data
 
 WORKDIR /app
 COPY package.json ./
@@ -14,6 +15,10 @@ COPY js ./js
 COPY css ./css
 COPY index.html favicon.svg ./
 COPY zabbix ./zabbix
+
+# Runtime configuration edited from the panel (mount a volume here to keep it).
+RUN mkdir -p /app/data && chown node:node /app/data
+VOLUME /app/data
 
 USER node
 EXPOSE 8080

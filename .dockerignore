@@ -6,3 +6,4 @@ tools
 README.md
 Dockerfile
 .dockerignore
+data

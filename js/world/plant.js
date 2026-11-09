@@ -124,9 +124,32 @@ export class PlantView {
     const o = new CSS2DObject(el);
     o.position.copy(pos);
     o.center.set(0.5, 1);
+    o.userData.prio = cls.includes('store') ? 2 : 1; // silos/tanks win over zone names
     this.scene.add(o);
     this.labels.push(o);
     return el;
+  }
+
+  // Hide labels that overlap on screen (higher priority and nearer first). Throttled.
+  declutter() {
+    const now = performance.now();
+    if (!this.labelsVisible || now - (this.lastDeclutter || 0) < 250) return;
+    this.lastDeclutter = now;
+    const items = [];
+    for (const o of this.labels) {
+      const el = o.element;
+      if (el.style.display === 'none') continue;
+      el.style.visibility = 'visible';
+      items.push({ el, prio: o.userData.prio, r: el.getBoundingClientRect() });
+    }
+    items.sort((a, b) => b.prio - a.prio || b.r.bottom - a.r.bottom);
+    const placed = [];
+    for (const it of items) {
+      const { r } = it;
+      const hit = placed.some((p) => r.left < p.right + 3 && r.right > p.left - 3 && r.top < p.bottom + 2 && r.bottom > p.top - 2);
+      if (hit) it.el.style.visibility = 'hidden';
+      else placed.push(r);
+    }
   }
 
   add(group, x, z, rotY = 0) {
@@ -303,7 +326,7 @@ export class PlantView {
     // Chimney smoke puffs.
     const chim = BUILDINGS.find((b) => b.id === 'CHIM');
     for (let i = 0; i < 18; i++) {
-      const s = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), this.M.smoke.clone());
+      const s = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), this.M.smoke.clone());
       s.userData.phase = i / 18;
       s.userData.base = V(chim.x, chim.h, chim.z);
       this.scene.add(s);

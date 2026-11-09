@@ -36,7 +36,7 @@ export class SnapshotBuffer {
   }
 }
 
-export async function connect({ onSnapshot, onMode }) {
+export async function connect({ onSnapshot, onMode, askToken }) {
   let control = async () => ({ ok: false });
   let problems = async () => ({ ok: false });
 
@@ -92,31 +92,42 @@ export async function connect({ onSnapshot, onMode }) {
     });
 
   const live = await tryServer();
+  let api = async () => ({ ok: false, error: 'Sin servidor: la configuración de Zabbix, IoT y CEP requiere el servidor.' });
   if (live) {
-    // POST with the optional CONTROL_TOKEN (asked once and remembered).
-    const post = async (url, cmd) => {
-      const headers = { 'Content-Type': 'application/json' };
-      let token = null;
+    // Calls with the admin key (asked once through the modal and remembered in this browser).
+    const getKey = () => {
       try {
-        token = localStorage.getItem('controlToken');
-      } catch {}
-      if (token) headers['x-control-token'] = token;
-      let r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(cmd) });
-      if (r.status === 401) {
-        const t = window.prompt('Token de control del servidor (CONTROL_TOKEN):');
-        if (!t) return { ok: false };
-        try {
-          localStorage.setItem('controlToken', t);
-        } catch {}
-        headers['x-control-token'] = t;
-        r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(cmd) });
+        return localStorage.getItem('controlToken') || '';
+      } catch {
+        return '';
       }
-      return r.json();
     };
-    control = (cmd) => post('api/control', cmd);
-    problems = (cmd) => post('api/problems', cmd);
+    const setKey = (k) => {
+      try {
+        k ? localStorage.setItem('controlToken', k) : localStorage.removeItem('controlToken');
+      } catch {}
+    };
+    api = async (method, url, body) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const headers = { 'Content-Type': 'application/json' };
+        const key = getKey();
+        if (key) headers['x-control-token'] = key;
+        const r = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+        if (r.status !== 401) {
+          const j = await r.json().catch(() => ({}));
+          return r.ok ? j : { ...j, ok: false, status: r.status };
+        }
+        setKey('');
+        const k = await askToken?.(attempt ? 'Clave incorrecta, intenta de nuevo.' : '');
+        if (!k) return { ok: false, cancelled: true, error: 'Se requiere la clave de administrador.' };
+        setKey(k);
+      }
+      return { ok: false, error: 'Clave incorrecta.' };
+    };
+    control = (cmd) => api('POST', 'api/control', cmd);
+    problems = (cmd) => api('POST', 'api/problems', cmd);
   } else {
     await startLocal('sin servidor');
   }
-  return { control: (cmd) => control(cmd), problems: (cmd) => problems(cmd) };
+  return { live, control: (cmd) => control(cmd), problems: (cmd) => problems(cmd), api: (m, u, b) => api(m, u, b) };
 }

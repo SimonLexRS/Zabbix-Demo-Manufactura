@@ -7,13 +7,14 @@ import { createEnvironment } from './world/environment.js';
 import { PlantView } from './world/plant.js';
 import { SnapshotBuffer, connect } from './net.js';
 import { UI } from './ui/ui.js';
+import { ConfigPanel } from './ui/config-panel.js';
+import { PixelRenderer, loadAppearance, saveAppearance } from './world/pixel.js';
 import { STORAGES, OIL_TANKS, BUILDINGS, STATIONS, BOILERS } from './sim/layout.js';
 
 const container = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap; // crisp shadows suit the pixel look
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -41,6 +42,9 @@ const M = createMaterials();
 const env = createEnvironment(scene, M);
 const plant = new PlantView(scene, M);
 
+let appearance = loadAppearance();
+const pixel = new PixelRenderer(renderer, scene, camera, appearance);
+
 const snaps = new SnapshotBuffer();
 let follow = null; // { kind, id }
 let fly = null;
@@ -58,7 +62,12 @@ const ui = new UI({
   },
   onClearProblems: async () => {
     await source?.problems({ clearAll: true });
-    ui.toast('Todos los problemas normalizados');
+    ui.toast('Todas las fallas normalizadas');
+  },
+  onConfig: () => (config.isOpen ? config.close() : (select(null), config.open())),
+  onEscape: () => {
+    if (config.isOpen) config.close();
+    else select(null);
   },
   onLabels: (on) => plant.setLabelsVisible(on),
   onHome: () => {
@@ -84,18 +93,33 @@ const ui = new UI({
 
 async function setProblem(id, active) {
   const r = await source?.problems({ id, active });
+  if (r?.cancelled) return;
   const p = r?.problems?.find((x) => x.id === id);
   if (p) ui.toast(active ? `Activado (manual): ${p.name} — se envía a Zabbix` : `Normalizado: ${p.name}`);
 }
 
 let source = null;
+const config = new ConfigPanel({
+  api: (m, u, b) => (source ? source.api(m, u, b) : Promise.resolve({ ok: false, error: 'Conectando…' })),
+  toast: (m) => ui.toast(m),
+  appearance: {
+    get: () => appearance,
+    set: (patch) => {
+      appearance = { ...appearance, ...patch };
+      saveAppearance(appearance);
+      pixel.set(appearance);
+    },
+  },
+});
 connect({
   onSnapshot: (s) => {
     snaps.push(s);
     plant.applyState(s);
     ui.update(s);
+    config.updateLive(s);
   },
   onMode: (m) => ui.setMode(m),
+  askToken: (msg) => ui.askToken(msg),
 }).then((s) => (source = s));
 
 // ───────────── picking ─────────────
@@ -131,6 +155,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 });
 
 function select(pick) {
+  if (pick && config?.isOpen) config.close();
   plant.select(pick);
   ui.showDetails(pick);
   if (!pick) follow = null;
@@ -168,7 +193,7 @@ function flyTo(target, dist, pos) {
 function resize() {
   const w = container.clientWidth;
   const h = container.clientHeight;
-  renderer.setSize(w, h);
+  pixel.setSize(w, h);
   labelRenderer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
@@ -207,8 +232,9 @@ function frame() {
     }
   }
   controls.update();
-  renderer.render(scene, camera);
+  pixel.render();
   labelRenderer.render(scene, camera);
+  plant.declutter();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

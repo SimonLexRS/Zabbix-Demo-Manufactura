@@ -1,7 +1,10 @@
 // Shared procedural textures and materials (no external assets).
 import * as THREE from 'three';
 
+// Textures are drawn small (max 64 px) and sampled with NearestFilter: chunky pixel look.
 function canvasTex(w, h, draw, repeat = [1, 1]) {
+  w = Math.min(64, w);
+  h = Math.min(64, h);
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
@@ -10,7 +13,9 @@ function canvasTex(w, h, draw, repeat = [1, 1]) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(...repeat);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
   return t;
 }
 
@@ -36,10 +41,12 @@ export function noiseTex(base, spots, amount = 900, size = 3, repeat = [1, 1]) {
   return canvasTex(256, 256, (g, w, h) => {
     g.fillStyle = base;
     g.fillRect(0, 0, w, h);
-    for (let i = 0; i < amount; i++) {
+    // Scaled to the small canvas: whole-pixel speckles, no sub-pixel blur.
+    const n = Math.round((amount * w * h) / 65536);
+    for (let i = 0; i < n; i++) {
       g.fillStyle = spots[i % spots.length];
-      g.globalAlpha = 0.25 + Math.random() * 0.35;
-      g.fillRect(Math.random() * w, Math.random() * h, Math.random() * size + 1, Math.random() * size + 1);
+      g.globalAlpha = 0.35 + Math.random() * 0.4;
+      g.fillRect(Math.floor(Math.random() * w), Math.floor(Math.random() * h), size > 3 ? 2 : 1, 1);
     }
     g.globalAlpha = 1;
   }, repeat);
@@ -73,14 +80,14 @@ export function laneTex() {
   });
 }
 
-const std = (o) => new THREE.MeshStandardMaterial(o);
+const std = (o) => new THREE.MeshStandardMaterial({ flatShading: true, ...o });
 
 export function createMaterials() {
-  const roofGray = corrugated('#aab2b8', '#7f888f', 48);
-  const roofRed = corrugated('#b4513a', '#8a3726', 48);
-  const roofOrange = corrugated('#de6a2c', '#b14f1b', 48);
-  const siloTex = corrugated('#d4d9dd', '#a7afb5', 40, false);
-  const wallTex = corrugated('#dadcd8', '#b9bcb6', 64);
+  const roofGray = corrugated('#aab2b8', '#7f888f', 16);
+  const roofRed = corrugated('#b4513a', '#8a3726', 16);
+  const roofOrange = corrugated('#de6a2c', '#b14f1b', 16);
+  const siloTex = corrugated('#d4d9dd', '#a7afb5', 16, false);
+  const wallTex = corrugated('#dadcd8', '#b9bcb6', 16);
   return {
     grass: std({ map: noiseTex('#5c8a3c', ['#4d7a31', '#6c9a47', '#557f36'], 3000, 4, [40, 40]), roughness: 1 }),
     dirt: std({ map: noiseTex('#cdb894', ['#bba67f', '#d9c7a4', '#b59c74'], 2500, 3, [12, 24]), roughness: 1 }),
@@ -102,7 +109,7 @@ export function createMaterials() {
     steelLight: std({ color: 0x9aa4ad, roughness: 0.4, metalness: 0.7 }),
     yellow: std({ color: 0xf2c230, roughness: 0.6 }),
     red: std({ color: 0xc23b2c, roughness: 0.5 }),
-    redWhite: std({ map: corrugated('#c23b2c', '#f2f2ee', 10, false), roughness: 0.5 }),
+    redWhite: std({ map: corrugated('#c23b2c', '#f2f2ee', 8, false), roughness: 0.5 }),
     dark: std({ color: 0x2a2d31, roughness: 0.9 }),
     glass: std({ color: 0x8fb3c9, roughness: 0.1, metalness: 0.5 }),
     tire: std({ color: 0x1d1f22, roughness: 0.95 }),
