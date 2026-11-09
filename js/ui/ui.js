@@ -105,6 +105,24 @@ export class UI {
     // The navigation hint fades after a while (and whenever a popup opens).
     setTimeout(() => $('#hint').classList.add('gone'), 14000);
     this.buildAuthModal();
+    // HUD offsets come from real sizes (fonts and wrapping change them), not fixed numbers.
+    const relayout = () => this.layoutHud();
+    window.addEventListener('resize', relayout);
+    document.fonts?.ready.then(relayout);
+    relayout();
+  }
+
+  layoutHud() {
+    const root = document.documentElement.style;
+    const b = $('.brand').getBoundingClientRect();
+    root.setProperty('--brand-r', `${Math.round(b.right)}px`);
+    root.setProperty('--brand-b', `${Math.round(b.bottom)}px`);
+    // KPIs move only after the variables above apply; measure them on the next frame.
+    requestAnimationFrame(() => {
+      const k = $('#kpis').getBoundingClientRect();
+      const bottom = Math.max(k.bottom, b.bottom);
+      root.setProperty('--hud-b', `${Math.round(bottom + 10)}px`);
+    });
   }
 
   openMenu(btn, pop) {
@@ -244,7 +262,9 @@ export class UI {
       const ago = Math.max(0, Math.round((Date.now() - Date.parse(l.at)) / 1000));
       const iotFailed = z.iot?.failed ?? 0;
       cls += l.failed > 0 || iotFailed > 0 || z.iot?.error ? ' warn' : ' ok';
-      txt = `Zabbix · ${l.processed} ok · ${l.failed} fallidos${z.iot ? ` · IoT ${z.iot.devices} disp.` : ''} · hace ${ago} s`;
+      const devs = s.iot?.devices || [];
+      const online = devs.filter((d) => d.online).length;
+      txt = `Zabbix · ${l.processed} ok · ${l.failed} fallidos${s.iot?.enabled && devs.length ? ` · IoT ${online}/${devs.length} en línea` : ''} · hace ${ago} s`;
     }
     if (z.provision === 'error') txt += ' · alta con error';
     el.className = cls;
@@ -287,6 +307,7 @@ export class UI {
     const el = $('#kpis');
     if (!el.children.length) {
       el.innerHTML = items.map(() => '<div class="kpi"><span class="k"></span><b class="v"></b><small class="s"></small></div>').join('');
+      requestAnimationFrame(() => this.layoutHud());
     }
     items.forEach(([label, v, sub, cls], i) => {
       const c = el.children[i];
