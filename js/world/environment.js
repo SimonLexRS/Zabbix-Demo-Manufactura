@@ -144,7 +144,7 @@ export function createEnvironment(scene, M) {
   scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xfff3dd, 2.4);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(window.innerWidth < 860 ? 2048 : 4096, window.innerWidth < 860 ? 2048 : 4096);
   const sc = sun.shadow.camera;
   sc.left = -200;
   sc.right = 200;

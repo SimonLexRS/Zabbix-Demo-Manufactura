@@ -1,6 +1,6 @@
 # Zabbix Demo Manufactura — Planta Aceitera 3D
 
-Gemelo digital 3D en estilo **pixel art** (Three.js) de una planta de **acopio y molienda de soya**: recepción de camiones por RN4, calado, pesaje, volcadoras, norias, silos y galpones, preparación, **extracción por hexano**, **sala de fuerza** (calderas/vapor), tanques de aceite, galpón de harina y despacho.
+Gemelo digital 3D (Three.js) de una planta de **acopio y molienda de soya**: recepción de camiones por RN4, calado, pesaje, volcadoras, norias, silos y galpones, preparación, **extracción por hexano**, **sala de fuerza** (calderas/vapor), tanques de aceite, galpón de harina y despacho.
 
 La simulación corre en el **servidor** y expone **métricas para Zabbix** (HTTP agent + LLD) y Prometheus. El navegador solo dibuja el estado en vivo.
 
@@ -85,7 +85,7 @@ Botón **Configuración** en la barra inferior. Los cambios se aplican en calien
 - **CEP** (correlación de eventos):
   - **Motor en la app**: reglas "A y B dentro de N minutos" (o "A o B") sobre fallas y métricas. Incluye 5 reglas (red de balanza → camión detenido, pérdida de vapor → molienda, riesgo de seguridad en extracción, cuello de botella en recepción, calidad de grano) y un editor para crear, ajustar ventana/severidad, desactivar o borrar reglas. Cada regla llega a Zabbix como `planta.cep.active[<regla>]` (0 inactiva, 1–5 severidad) con su trigger, más `planta.cep.last_event`.
   - **En Zabbix**: el template sender trae **dependencias de triggers** (p. ej. "camión detenido" depende de "caída de red en balanza"; "molienda < 70 %" de "presión de vapor baja", que depende de los disparos de caldera) y tags `scope` + `rootcause`/`symptom`. Desde el panel se crea la **correlación global** *"Planta Aceitera: la causa raíz cierra los síntomas"* (requiere token Super admin).
-- **Apariencia**: modo **pixel art** (render pixelado con contornos) y tamaño de píxel; se guarda por navegador.
+- **Apariencia**: render en alta calidad por defecto; modo retro pixelado opcional (se guarda por navegador).
 
 ## Envío a Zabbix con Zabbix sender (push)
 

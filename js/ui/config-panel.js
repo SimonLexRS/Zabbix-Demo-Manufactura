@@ -236,11 +236,11 @@ export class ConfigPanel {
     const a = this.appearance.get();
     return `
       <h3>Apariencia</h3>
-      <button class="cfg-switch" data-act="look-pixel"><span>Modo pixel art (render pixelado con contornos)</span>${sw(a.pixel)}</button>
+      <button class="cfg-switch" data-act="look-pixel"><span>Modo retro pixelado (opcional)</span>${sw(a.pixel)}</button>
       <div class="form">
         <label class="wide">Tamaño de píxel: <b id="pxv">${a.pixelSize}</b><input type="range" min="2" max="6" step="1" value="${a.pixelSize}" data-look="pixelSize" /></label>
       </div>
-      <p class="note">La preferencia se guarda solo en este navegador. Con el modo pixel desactivado la escena usa la resolución completa de la pantalla.</p>`;
+      <p class="note">La preferencia se guarda solo en este navegador. Por defecto la escena se dibuja en alta calidad con la resolución completa de la pantalla.</p>`;
   }
 
   // ───────────── events ─────────────

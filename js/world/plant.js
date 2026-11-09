@@ -326,7 +326,7 @@ export class PlantView {
     // Chimney smoke puffs.
     const chim = BUILDINGS.find((b) => b.id === 'CHIM');
     for (let i = 0; i < 18; i++) {
-      const s = new THREE.Mesh(new THREE.BoxGeometry(1.6, 1.6, 1.6), this.M.smoke.clone());
+      const s = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), this.M.smoke.clone());
       s.userData.phase = i / 18;
       s.userData.base = V(chim.x, chim.h, chim.z);
       this.scene.add(s);

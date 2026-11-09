@@ -5,10 +5,10 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPixelatedPass } from 'three/addons/postprocessing/RenderPixelatedPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-const KEY = 'plantaAppearance';
+const KEY = 'plantaAppearance.v2'; // v2: high-quality render is the default
 
 export function loadAppearance() {
-  const def = { pixel: true, pixelSize: window.innerWidth < 860 ? 2 : 3 };
+  const def = { pixel: false, pixelSize: 3 };
   try {
     return { ...def, ...JSON.parse(localStorage.getItem(KEY) || '{}') };
   } catch {
