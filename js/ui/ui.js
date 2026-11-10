@@ -260,15 +260,16 @@ export class UI {
     const el = $('#zbx');
     if (!z || !z.enabled) {
       el.className = 'zbx off';
-      el.textContent = s.zabbix ? 'Zabbix sender: deshabilitado' : '';
+      el.textContent = s.zabbix ? 'Zabbix: deshabilitado' : '';
       return;
     }
     const l = z.last;
     let cls = 'zbx';
-    let txt = `Zabbix sender → ${z.server} · esperando primer envío`;
+    const via = z.transport === 'sender' ? 'Zabbix sender' : 'Zabbix API';
+    let txt = `${via} → ${z.server} · esperando primer envío`;
     if (l?.error) {
       cls += ' bad';
-      txt = `Zabbix sender: ${l.error}`;
+      txt = `${via}: ${l.error}`;
     } else if (l) {
       const ago = Math.max(0, Math.round((Date.now() - Date.parse(l.at)) / 1000));
       const iotFailed = z.iot?.failed ?? 0;
@@ -280,7 +281,7 @@ export class UI {
     if (z.provision === 'error') txt += ' · alta con error';
     el.className = cls;
     el.textContent = txt;
-    el.title = `Host "${z.host}" en ${z.server}. Alta automática: ${z.provision}. Correlación: ${z.correlation}.${z.iot ? ` IoT: ${z.iot.processed} ok / ${z.iot.failed} fallidos.` : ''}`;
+    el.title = `Host "${z.host}" en ${z.server}. Alta automática: ${z.provision}. CEP: ${z.cep?.state ?? '—'}.${z.iot ? ` IoT: ${z.iot.processed} ok / ${z.iot.failed} fallidos.` : ''}`;
   }
 
   recordHistory(s) {

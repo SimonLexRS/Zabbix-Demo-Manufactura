@@ -285,7 +285,8 @@ async function zabbixTest() {
 
 const zabbixSummary = () => ({
   enabled: cfg().zabbix.enabled,
-  server: `${cfg().zabbix.server}:${cfg().zabbix.port}`,
+  transport: cfg().zabbix.transport,
+  server: cfg().zabbix.transport === 'sender' ? `${cfg().zabbix.server}:${cfg().zabbix.port}` : cfg().zabbix.webUrl || cfg().zabbix.apiUrl,
   host: cfg().zabbix.host,
   last: zbx.last,
   iot: zbx.iot.last,
