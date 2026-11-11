@@ -4,7 +4,7 @@
 // people, flows, stations, traffic). Once per second — or right away when a
 // problem or work order changes — it sends the "full" snapshot.
 
-export const FAST_KEYS = ['tick', 't', 'clock', 'speed', 'vehicles', 'people', 'flows', 'stations', 'traffic'];
+export const FAST_KEYS = ['tick', 't', 'clock', 'speed', 'vehicles', 'people', 'flows', 'stations', 'traffic', 'gates'];
 
 // 3 decimals are plenty for positions (1 u ≈ 1.5 m) and keep the JSON small.
 const round = (_k, v) => (typeof v === 'number' && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v);

@@ -12,7 +12,7 @@ const ACC = 2.5; // u/s² acceleration
 const BRAKE = 5; // service braking
 const EMERGENCY = 9; // emergency braking
 const ENGINE_BRAKE = 0.8; // what a truck without brakes can still do
-const S0 = 3; // minimum standstill gap
+const S0 = 3.5; // minimum standstill gap (bumper to bumper, a semitrailer needs room to start)
 const HEADWAY = 0.8; // time gap
 const TRUCK_LEN = 11;
 const LANE_BAND = 2.4; // lateral half-width of "same lane"
@@ -79,7 +79,8 @@ export class Traffic {
     for (let i = v.pi; i < v.path.length; i++) {
       const p = v.path[i];
       const seg = Math.hypot(p.x - px, p.z - pz);
-      if (!corner && i + 1 < v.path.length) {
+      // Points of a rounded curve carry their own speed cap (vmax) and are not "corners".
+      if (!corner && i + 1 < v.path.length && p.vmax === undefined) {
         const n = v.path[i + 1];
         const a1 = Math.atan2(p.z - pz, p.x - px);
         const a2 = Math.atan2(n.z - p.z, n.x - p.x);
@@ -334,7 +335,8 @@ export class Traffic {
     } else if (L) {
       const vf = Math.sqrt(Math.max(0, L.speed * L.speed + 2 * BRAKE * (L.gap - S0 - HEADWAY * v.speed * 0.3)));
       // Overtaking a stopped vehicle, or a priority vehicle (tow) passing using the other lane.
-      const overtaking = !L.isPerson && !L.obj.crashed && ((sim.t < (v.overtakeUntil ?? 0) && this.canOvertake(v, L, remain)) || prio);
+      // A jam clearance only passes vehicles that are standing still (never through moving ones).
+      const overtaking = !L.isPerson && !L.obj.crashed && ((sim.t < (v.overtakeUntil ?? 0) && this.canOvertake(v, L, remain)) || v.priority || (prio && (L.speed ?? 0) < 0.5));
       v.passing = overtaking && (L.gap < 14 || sim.t < (v.overtakeUntil ?? 0));
       if (!ignoring && !overtaking && vf < target) {
         target = vf;
@@ -383,7 +385,10 @@ export class Traffic {
       if (free && !held && carCommitted) free = false;
       // Don't block the box: only enter a crossing if there is room to clear it (the vehicle ahead
       // is not standing within our length past the exit). Prevents gridlock around the gate.
-      if (free && !held && L && !L.isPerson && (L.speed ?? 0) < 1 && !L.obj.passing) {
+      // A vehicle stopped at a station that we may overtake is not a reason to wait: otherwise a
+      // truck holding the next station waits forever behind one that waits for that station.
+      const passable = sim.t < (v.overtakeUntil ?? 0) || this.canOvertake(v, L, remain);
+      if (free && !held && L && !L.isPerson && (L.speed ?? 0) < 1 && !L.obj.passing && !passable) {
         const exit = chain[chain.length - 1].exit + 1.5;
         if (L.gap < exit + TRUCK_LEN / 2 + S0 / 2 && remain > exit + TRUCK_LEN / 2) free = false;
       }
@@ -429,7 +434,7 @@ export class Traffic {
     // Move. A driver who is paying attention never closes in below half the standstill gap
     // (this keeps queues tidy even around corners); only an unbraked truck can hit.
     let dist = v.speed * dt;
-    if (L && !ignoring && !v.passing && !prio) {
+    if (L && !ignoring && !v.passing && !v.priority) {
       const room = Math.max(0, L.gap - (L.isPerson ? 0.5 : S0 * 0.5) + L.speed * dt);
       if (dist > room) {
         dist = room;
@@ -450,7 +455,7 @@ export class Traffic {
     if (!L) v.passing = sim.t < (v.overtakeUntil ?? 0) && v.speed > 0.5;
     if (L) {
       const newGap = L.gap - v.speed * dt + L.speed * dt;
-      if (!L.isPerson && !v.passing && !prio && newGap <= 0 && sim.realism.collisions && ignoring) {
+      if (!L.isPerson && !v.passing && !v.priority && newGap <= 0 && sim.realism.collisions && ignoring) {
         sim.collide(v, L.obj);
         return false;
       }
@@ -519,8 +524,10 @@ export class Traffic {
         }
         if (n.crashed) break; // collision: handled by the collision procedure
         if (!this.isStuck(n, 0.5)) {
-          // Waiting behind a vehicle at a station: a normal queue, unless it lasts too long.
-          if (n.phase !== 'travel' && (v.blockedFor ?? 0) >= 12) cause = 'estacion';
+          // Waiting behind a vehicle at a station: a normal queue, unless that vehicle is waiting
+          // for the very station we hold (deadlock) or it lasts too long.
+          if (n.phase === 'request' && h.station && this.wantsStation(n, h.station)) cause = 'reserva';
+          else if (n.phase !== 'travel' && (v.blockedFor ?? 0) >= 12) cause = 'estacion';
           break;
         }
         h = n;
@@ -529,20 +536,27 @@ export class Traffic {
       const key = h.id;
       const g = groups.get(key) ?? { head: h, cause, ids: new Set(), wait: 0 };
       g.ids.add(v.id);
-      if (cause === 'varado' || cause === 'ciclo') g.cause = cause;
+      if (cause === 'varado' || cause === 'ciclo' || cause === 'reserva') g.cause = cause;
       g.wait = Math.max(g.wait, v.blockedFor ?? 0);
       groups.set(key, g);
     }
     let best = null;
     for (const g of groups.values()) {
       const n = g.ids.size + (g.head.stalled ? 1 : 0);
-      const jam = g.cause === 'varado' ? n >= 2 && g.wait >= 1 : (n >= 3 && g.wait >= 3) || (n >= 2 && g.wait >= 4) || g.wait >= 6;
+      const jam =
+        g.cause === 'varado' ? n >= 2 && g.wait >= 1 : g.cause === 'reserva' ? g.wait >= 2 : (n >= 3 && g.wait >= 3) || (n >= 2 && g.wait >= 4);
       if (jam && (!best || n > best.ids.size)) best = g;
     }
     if (!best) return null;
     const vs = [...best.ids].map((id) => byId.get(id)).filter(Boolean);
     if (best.head.stalled) vs.push(best.head);
     return { head: best.head, cause: best.cause, vehicles: vs, wait: best.wait };
+  }
+
+  // Is vehicle n (waiting for its next step) asking for station st?
+  wantsStation(n, st) {
+    const step = n.plan[n.step];
+    return step === st || (step === 'HOPPER' && (st === 'H1' || st === 'H2'));
   }
 
   // Longest current wait of a vehicle stopped on a road (min).
@@ -552,13 +566,14 @@ export class Traffic {
     return m;
   }
 
-  // Level 1: the supervisor (flagman) directs the trucks at the head of the jam.
+  // Level 1: the supervisor (flagman) directs the trucks at the head of the jam and lets them
+  // go round what stands still (their waiting time keeps counting, so the jam can escalate).
   directJam(vehicles) {
     let n = 0;
     for (const v of vehicles) {
       if (v.kind === 'car' || v.stalled) continue;
       v.flagmanUntil = this.sim.t + 1.5;
-      v.blockedFor = Math.min(v.blockedFor ?? 0, 2);
+      v.overtakeUntil = this.sim.t + 3;
       n++;
     }
     return n;

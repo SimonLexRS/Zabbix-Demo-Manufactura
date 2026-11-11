@@ -49,10 +49,26 @@ const pixel = new PixelRenderer(renderer, scene, camera, appearance);
 
 const snaps = new SnapshotBuffer();
 let follow = null; // { kind, id }
+// Lighting of the 3D view: 'auto' (plant clock), 'day' or 'night' — a per-viewer preference.
+let daylight = 'auto';
+try {
+  daylight = localStorage.getItem('daylight') || 'auto';
+} catch {}
+let hourShown = 10;
 let fly = null;
 
 const ui = new UI({
   onSpeed: (v) => source?.control({ speed: v }),
+  onDaylight: (v) => {
+    daylight = v;
+    try {
+      localStorage.setItem('daylight', v);
+    } catch {}
+  },
+  onSetHour: async (h) => {
+    const r = await source?.control({ setHour: h });
+    ui.toast(r?.ok ? `Reloj de planta adelantado a las ${String(h).padStart(2, '0')}:00` : 'No se pudo cambiar la hora');
+  },
   onTour: (t) => {
     follow = null;
     if (t.monitor) return enterMonitor();
@@ -108,6 +124,7 @@ async function setProblem(id, active) {
   if (p) ui.toast(active ? `Activado (manual): ${p.name} — se envía a Zabbix` : `Normalizado: ${p.name}`);
 }
 
+ui.setDaylight(daylight);
 let source = null;
 const config = new ConfigPanel({
   api: (m, u, b) => (source ? source.api(m, u, b) : Promise.resolve({ ok: false, error: 'Conectando…' })),
@@ -131,6 +148,7 @@ connect({
     state = next;
     snaps.push(msg);
     plant.stationState = state.stations;
+    if (state.gates) plant.gateOpen = state.gates;
     if (msg.k === 'f') {
       ui.updateFast(state);
       return;
@@ -285,11 +303,16 @@ function step() {
   const speed = snaps.latest?.speed ?? 1;
   if (sample) {
     plant.syncAgents(sample, dt, speed);
-    env.update(dt, ((snaps.playT ?? sample.b.t) % 1440) / 60);
+    // Plant clock = sim time + the offset set by "Hora"; the viewer may force day or night.
+    const off = snaps.latest?.clock?.off ?? 0;
+    const simHour = ((((snaps.playT ?? sample.b.t) + off) % 1440) + 1440) % 1440 / 60;
+    hourShown = daylight === 'day' ? 12 : daylight === 'night' ? 23 : simHour;
+    env.update(dt, hourShown);
   } else {
-    env.update(dt, 10);
+    hourShown = daylight === 'night' ? 23 : 10;
+    env.update(dt, hourShown);
   }
-  plant.frame(dt, speed);
+  plant.frame(dt, speed, snaps.playT, hourShown < 6.5 || hourShown > 18.8);
 
   if (fly) {
     fly.t = Math.min(1, fly.t + dt / 1.2);

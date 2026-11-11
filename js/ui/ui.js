@@ -37,6 +37,44 @@ export class UI {
       b.onclick = () => this.h.onSpeed(v);
       sp.appendChild(b);
     }
+    // Lighting of the 3D view (only for this viewer): follow the plant clock, or force day/night.
+    const dl = $('#daylight');
+    for (const [v, l, t] of [
+      ['auto', 'Auto', 'Iluminación según la hora de la planta'],
+      ['day', '☀', 'Forzar día en la vista 3D'],
+      ['night', '☾', 'Forzar noche en la vista 3D'],
+    ]) {
+      const b = document.createElement('button');
+      b.textContent = l;
+      b.title = t;
+      b.dataset.light = v;
+      b.onclick = () => {
+        this.h.onDaylight(v);
+        this.setDaylight(v);
+      };
+      dl.appendChild(b);
+    }
+    // Plant clock: jump forward to a given hour (affects everyone: arrivals, shifts, metrics).
+    const hours = $('#hourItems');
+    for (const [h, d] of [
+      [6, 'Inicio del turno mañana'],
+      [9, 'Mañana, máxima recepción'],
+      [12, 'Mediodía'],
+      [15, 'Tarde'],
+      [18, 'Atardecer'],
+      [21, 'Noche, menos camiones'],
+      [0, 'Medianoche (cierra el día)'],
+      [3, 'Madrugada'],
+    ]) {
+      const b = document.createElement('button');
+      b.className = 'menu-item';
+      b.innerHTML = `<b>${String(h).padStart(2, '0')}:00</b><span>${esc(d)}</span>`;
+      b.onclick = () => {
+        this.closeMenus();
+        this.h.onSetHour(h);
+      };
+      hours.appendChild(b);
+    }
     const tour = $('#tourItems');
     for (const t of TOUR) {
       const b = document.createElement('button');
@@ -124,6 +162,10 @@ export class UI {
       const bottom = Math.max(k.bottom, b.bottom);
       root.setProperty('--hud-b', `${Math.round(bottom + 10)}px`);
     });
+  }
+
+  setDaylight(v) {
+    document.querySelectorAll('#daylight button').forEach((b) => b.classList.toggle('active', b.dataset.light === v));
   }
 
   openMenu(btn, pop) {
@@ -578,8 +620,8 @@ export function describe(pick, s) {
       extra.push(
         ['Camiones en RN4', fmt(k.roadQueue), 'planta.trucks_waiting_road'],
         ['Ingresos hoy', fmt(k.trucksIn), 'planta.trucks_received_today'],
-        ['Barrera de entrada', s.gates?.in ? 'Arriba' : 'Abajo', ''],
-        ['Barrera de salida', s.gates?.out ? 'Arriba' : 'Abajo', ''],
+        ['Barrera de entrada', s.gates?.in?.open ? 'Arriba' : 'Abajo', ''],
+        ['Barrera de salida', s.gates?.out?.open ? 'Arriba' : 'Abajo', ''],
         ['Atasco', j ? `${j.place} · ${j.vehicles} veh. · ${j.minutes} min · nivel ${j.level}` : 'No', 'planta.traffic_jam_active'],
         ['Atascos hoy', fmt(s.traffic?.traffic_jams_today ?? 0), 'planta.traffic_jams_today'],
       );

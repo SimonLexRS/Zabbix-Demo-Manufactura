@@ -78,7 +78,7 @@ export const STATIONS = {
   BAL_DS: { id: 'BAL_DS', name: 'Balanza de despacho (bruto)', x: -34, z: 3, cap: 1 },
   H1: { id: 'H1', name: 'Volcadora / Tolva 1 (silos)', x: -40, z: 93, cap: 1 },
   H2: { id: 'H2', name: 'Volcadora / Tolva 2 (galpones)', x: -44, z: 49, cap: 1 },
-  OL: { id: 'OL', name: 'Carga de aceite (cisternas)', x: 46, z: 3, cap: 1 },
+  OL: { id: 'OL', name: 'Carga de aceite (cisternas)', x: 44, z: 3, cap: 1 }, // clear of the ANILLO_E crossing
   ML: { id: 'ML', name: 'Carga de harina', x: -14, z: 3, cap: 1 },
 };
 
@@ -105,7 +105,8 @@ export const YARD_SLOTS = (() => {
   for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) s.push({ x: 25 + c * 7.5 - (r ? 3.75 : 0), z: 62 + r * 16 });
   return s;
 })();
-export const YARD_AISLE_Z = 49; // C3 road, north of the yard: entry and exit point of every bay
+export const YARD_AISLE_Z = 49; // C3 road, north of the yard: trucks leave the bays here
+export const YARD_ENTRY_Z = 93; // C4 road, south of the yard: trucks drive into the bays from here (drive-through)
 
 // Grain storage receiving soy from the hoppers.
 export const STORAGES = [

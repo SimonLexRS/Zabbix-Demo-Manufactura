@@ -91,7 +91,7 @@ export class IoTFleet {
   readings(sim, d) {
     const s = this.state[d.id];
     const n = (v, scale = 1) => v + (Math.random() - 0.5) * 2 * (s.noise / 100) * scale;
-    const hour = (sim.t % 1440) / 60;
+    const hour = sim.hour ? sim.hour() : (sim.t % 1440) / 60;
     let v = {};
     if (d.id.startsWith('term-')) {
       const st = sim.storages.find((x) => x.id === d.asset);

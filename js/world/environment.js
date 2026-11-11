@@ -96,6 +96,22 @@ export function createEnvironment(scene, M) {
   sign(RN4.sX0 - 1.5, RN4.retS - 30, Math.PI); // southbound, approaching the retorno sur
   scene.add(median);
 
+  // Street lights (gate, yard, retornos, circuit junctions): on at night.
+  const lamps = [];
+  const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff3d6, emissive: 0xffd9a0, emissiveIntensity: 0 });
+  for (const [x, z] of [[66, 62], [78, 80], [36, 56], [36, 86], [RN4.sX0 - 2, RN4.retN], [RN4.nX1 + 2, RN4.retS]]) {
+    const g = new THREE.Group();
+    box(g, 0.25, 9, 0.25, M.steel, 0, 4.5, 0);
+    box(g, 1.6, 0.2, 0.2, M.steel, 0.7, 8.9, 0);
+    box(g, 0.7, 0.25, 0.5, bulbMat, 1.4, 8.75, 0, { cast: false });
+    const light = new THREE.PointLight(0xffd9a0, 0, 46, 1.6);
+    light.position.set(1.4, 8.4, 0);
+    g.add(light);
+    g.position.set(x, 0, z);
+    scene.add(g);
+    lamps.push(light);
+  }
+
   // Perimeter fence.
   const fenceH = 2.2;
   const fx = (SITE.x0 + SITE.x1) / 2;
@@ -207,6 +223,7 @@ export function createEnvironment(scene, M) {
   scene.fog = new THREE.Fog(DAY.clone(), 450, 1300);
 
   let waterT = 0;
+  let lampLevel = 0;
   return {
     update(dt, hour) {
       // Sun path: rises at 6, sets at 19.
@@ -225,6 +242,11 @@ export function createEnvironment(scene, M) {
       sun.color.setHex(twilight ? 0xffc48a : night ? 0x8aa6ff : 0xfff3dd);
       waterT += dt;
       water.material.color.setHSL(0.54, 0.38, 0.45 + Math.sin(waterT * 0.7) * 0.02);
+      const dark = hour < 6.5 || hour > 18.8;
+      const want = dark ? 1 : 0;
+      lampLevel += (want - lampLevel) * Math.min(1, dt * 2);
+      for (const l of lamps) l.intensity = lampLevel * 260;
+      bulbMat.emissiveIntensity = lampLevel * 3;
     },
   };
 }

@@ -7,8 +7,8 @@
 //  - snapshots streamed to clients, which interpolate between them.
 // Time: 1 movement-second == 1 simulated minute (so at 1x a sim day lasts 24 real minutes).
 
-import { GRID_BOUNDS, ROADS, SITE, STATIONS, SPAWN, YARD_SLOTS, YARD_AISLE_Z, STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS, PLANT_EDGE_X, RN4, uTurn, GATE_LANES, NODES } from './layout.js';
-import { Grid, offsetRight, lanePath } from './grid.js';
+import { GRID_BOUNDS, ROADS, SITE, STATIONS, SPAWN, YARD_SLOTS, YARD_AISLE_Z, YARD_ENTRY_Z, STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS, PLANT_EDGE_X, RN4, uTurn, GATE_LANES, NODES } from './layout.js';
+import { Grid, offsetRight, lanePath, filletPath } from './grid.js';
 import { MONITOR_ROOM } from './layout.js';
 import { PROBLEMS, PROBLEM_BY_ID, PLC_EXT_FIELDS } from './problems.js';
 import { IoTFleet } from './iot.js';
@@ -189,14 +189,9 @@ export class Simulation {
   }
 
   step(dt) {
-    const prevDay = Math.floor(this.t / 1440);
+    const prevDay = Math.floor(this.wall() / 1440);
     this.t += dt;
-    if (Math.floor(this.t / 1440) !== prevDay) {
-      const c = this.counters;
-      this.log(0, `Cierre del día ${prevDay + 1}: recibidas ${c.receivedT.toFixed(0)} t, molidas ${c.crushedT.toFixed(0)} t, aceite ${c.oilT.toFixed(0)} t, harina ${c.mealT.toFixed(0)} t`, 'sistema');
-      this.counters = this.freshCounters();
-      for (const s of Object.values(this.stations)) s.opsToday = 0;
-    }
+    if (Math.floor(this.wall() / 1440) !== prevDay) this.closeDay(prevDay);
     this.flows = { H1: false, H2: false, OL: false, ML: false };
     this.monitorPresence ??= false; // someone is looking at the monitoring room (set by the server / client)
     this.updateSpawns();
@@ -214,16 +209,50 @@ export class Simulation {
     this.evalTriggers();
   }
 
+  closeDay(prevDay) {
+    const c = this.counters;
+    this.log(0, `Cierre del día ${prevDay + 1}: recibidas ${c.receivedT.toFixed(0)} t, molidas ${c.crushedT.toFixed(0)} t, aceite ${c.oilT.toFixed(0)} t, harina ${c.mealT.toFixed(0)} t`, 'sistema');
+    this.counters = this.freshCounters();
+    for (const s of Object.values(this.stations)) s.opsToday = 0;
+  }
+
+  // Wall clock of the plant (minutes since day 1 00:00). `t` is the simulation time and only
+  // moves forward smoothly; setting the hour by hand moves this clock with an offset, so
+  // nothing in progress (dwells, repairs, timers) jumps.
+  wall(t = this.t) {
+    return t + (this.clockOffset ?? 0);
+  }
+
+  hour() {
+    return (this.wall() % 1440) / 60;
+  }
+
+  // Jumps the plant clock forward to the next time it is `h` o'clock (never backwards, so the
+  // day closing and the daily counters stay coherent).
+  setHour(h) {
+    h = Number(h);
+    if (!Number.isFinite(h) || h < 0 || h >= 24) return false;
+    const now = this.wall() % 1440;
+    let delta = (h * 60 - now + 1440) % 1440;
+    if (delta < 1) return true;
+    const prevDay = Math.floor(this.wall() / 1440);
+    this.clockOffset = (this.clockOffset ?? 0) + delta;
+    if (Math.floor(this.wall() / 1440) !== prevDay) this.closeDay(prevDay);
+    this.log(0, `Reloj de planta ajustado a ${String(Math.floor(h)).padStart(2, '0')}:00 (${this.clock().label})`, 'sistema');
+    return true;
+  }
+
   // ───────────────────────────── events ─────────────────────────────
   log(sev, msg, src = 'planta', kind = 'evento') {
-    this.events.unshift({ id: this.nextId++, t: this.t, sev, msg, src, kind });
+    this.events.unshift({ id: this.nextId++, t: this.t, off: this.clockOffset ?? 0, sev, msg, src, kind });
     if (this.events.length > 200) this.events.length = 200;
   }
 
-  clock(t = this.t) {
-    const day = Math.floor(t / 1440) + 1;
-    const m = Math.floor(t % 1440);
-    return { day, hh: Math.floor(m / 60), mm: m % 60, label: `Día ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}` };
+  clock(t = this.t, off = this.clockOffset ?? 0) {
+    const w = t + off;
+    const day = Math.floor(w / 1440) + 1;
+    const m = Math.floor(w % 1440);
+    return { day, hh: Math.floor(m / 60), mm: m % 60, off, label: `Día ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}` };
   }
 
   // ───────────────────────────── problems (manual + random) ─────────────────────────────
@@ -357,9 +386,12 @@ export class Simulation {
     if (this.jamCheck < 0.5) return;
     this.jamCheck = 0;
     if (this.pendingStall && this.active.has('traffic_jam')) this.stallOneTruck();
-    const found = this.collision ? null : this.traffic.findJam();
+    let found = this.collision ? null : this.traffic.findJam();
     const J = this.jam;
     if (!J) {
+      // Right after a jam is cleared, give the traffic a few minutes to settle before calling a
+      // new one (except a broken-down truck or a deadlock over a station).
+      if (found && this.t < (this.jamQuietUntil ?? 0) && !['varado', 'reserva'].includes(found.cause)) found = null;
       if (!found) return;
       this.jam = {
         since: this.t, x: found.head.x, z: found.head.z, level: 1, cause: found.cause, ids: found.vehicles.map((v) => v.id),
@@ -387,8 +419,8 @@ export class Simulation {
       J.cause = found.cause;
       J.clearSince = null;
       const stalled = this.vehicles.some((v) => v.stalled);
-      if (J.level === 1 && this.t - J.since >= 4 && !stalled) this.escalateJam('automático');
-      else if (J.level === 2 && this.t - (J.level2At ?? J.since) >= 4 && !stalled) {
+      if (J.level === 1 && this.t - J.since >= 3 && !stalled) this.escalateJam('automático');
+      else if (J.level === 2 && this.t - (J.level2At ?? J.since) >= 3 && !stalled) {
         // Still jammed after traffic control: another priority pass.
         this.traffic.forceClear(this.jamVehicles());
         J.level2At = this.t;
@@ -397,7 +429,7 @@ export class Simulation {
     }
     // Nothing stuck any more: resolved once it stays clear for a minute.
     J.clearSince ??= this.t;
-    if (this.t - J.clearSince >= 1 && !this.vehicles.some((v) => v.stalled)) this.resolveJam('tránsito normalizado');
+    if (this.t - J.clearSince >= 2 && !this.vehicles.some((v) => v.stalled)) this.resolveJam('tránsito normalizado');
   }
 
   escalateJam(by) {
@@ -414,6 +446,7 @@ export class Simulation {
     const J = this.jam;
     if (!J) return;
     this.jam = null;
+    this.jamQuietUntil = this.t + 3;
     this.counters.jamsCleared++;
     this.log(0, `Atasco resuelto en ${J.place} (${Math.round(this.t - J.since)} min, ${why})`, 'VIA', 'transito');
     const a = this.active.get('traffic_jam');
@@ -665,7 +698,7 @@ export class Simulation {
 
   // ───────────────────────────── trucks ─────────────────────────────
   updateSpawns() {
-    const hour = (this.t % 1440) / 60;
+    const hour = this.hour();
     const day = hour >= 6 && hour < 22;
     if (this.t >= this.nextSpawn.soy) {
       this.nextSpawn.soy = this.t + expo(day ? 24 : 48);
@@ -704,7 +737,7 @@ export class Simulation {
   // Through traffic on RN4: cars (and the odd truck passing by) driven by the same traffic model
   // as the plant trucks, so they brake behind them and give way at the plant access.
   updateHighway() {
-    const hour = (this.t % 1440) / 60;
+    const hour = this.hour();
     const mean = hour >= 6 && hour < 21 ? 3.5 : 9; // simulated minutes between cars, per direction
     this.nextCar ??= { s: this.t + rand(0, 2), n: this.t + rand(0, 2) };
     for (const dir of ['s', 'n']) {
@@ -965,9 +998,9 @@ export class Simulation {
     const join = [{ x: RN4.sLane, z: SHOULDER_JOIN_Z - 6 }, { x: RN4.sShoulder, z: SHOULDER_JOIN_Z }, { x: PREGATE.x, z: PREGATE.z }];
     if (v.x > RN4.medianX) {
       const u = uTurn('N');
-      return [from, { x: RN4.nLane, z: u[0].z + 1 }, ...u, ...join];
+      return filletPath([from, { x: RN4.nLane, z: u[0].z + 1 }, ...u, ...join], 8);
     }
-    return [from, ...join];
+    return filletPath([from, ...join], 8);
   }
 
   // From the exit barrier onto RN4, always turning right into the southbound carriageway;
@@ -977,9 +1010,9 @@ export class Simulation {
     const from = { x: v.x, z: v.z };
     const out = [from, { x: RN4.sX0 - 1, z: L.z }, { x: RN4.sLane, z: L.z + 9 }];
     if (v.x > RN4.medianX) return [from, { x: v.x, z: -182 }]; // already northbound
-    if (step === 'EXIT_S') return [...(v.x < RN4.sX0 ? out : [from]), { x: RN4.sLane, z: 182 }];
+    if (step === 'EXIT_S') return filletPath([...(v.x < RN4.sX0 ? out : [from]), { x: RN4.sLane, z: 182 }], 7);
     const u = uTurn('S');
-    return [...(v.x < RN4.sX0 ? out : [from]), { x: RN4.sLane, z: u[0].z - 1 }, ...u, { x: RN4.nLane, z: u[u.length - 1].z - 2 }, { x: RN4.nLane, z: -182 }];
+    return filletPath([...(v.x < RN4.sX0 ? out : [from]), { x: RN4.sLane, z: u[0].z - 1 }, ...u, { x: RN4.nLane, z: u[u.length - 1].z - 2 }, { x: RN4.nLane, z: -182 }], 7);
   }
 
   // Barrier booms at the gate: up while a truck is cleared to go through or is under it.
@@ -1030,16 +1063,20 @@ export class Simulation {
           // From the shoulder straight into the inbound lane of the access road (a right turn,
           // no lane of RN4 is crossed), up to the stop line before the entry barrier.
           const L = GATE_LANES.in;
-          v.path = [from, { x: RN4.sShoulder, z: ACCESS.z0 - 3 }, { x: RN4.sShoulder - 1.5, z: ACCESS.z0 + 1 }, { x: RN4.sX0 - 3, z: L.z }, { x: L.stopX, z: L.z }];
+          v.path = filletPath([from, { x: RN4.sShoulder, z: ACCESS.z0 - 2 }, { x: RN4.sX0 - 4, z: L.z }, { x: L.stopX, z: L.z }], 5);
         } else if (step === 'EXIT_N' || step === 'EXIT_S') {
           v.path = this.pathToExit(v, step);
         } else if (step === 'SLOT') {
-          const raw = route(roadCentre(from), { x: dest.x, z: YARD_AISLE_Z });
-          v.path = [...(raw ? lanePath(raw, v) : [from]), { x: dest.x, z: YARD_AISLE_Z + 6 }, { x: dest.x, z: dest.z }];
+          // Drive-through bays: in from the C4 road heading north (a right turn from the westbound
+          // lane), parked facing the C3 road, out straight ahead. No turning on the spot.
+          const raw = route(roadCentre(from), { x: dest.x, z: YARD_ENTRY_Z });
+          v.path = filletPath([...(raw ? lanePath(raw, v) : [from]), { x: dest.x, z: dest.z }]);
         } else if (prev === 'SLOT') {
+          // Out of the bay straight north to the C3 road, then west along the circuit.
           const exit = { x: v.x, z: YARD_AISLE_Z };
           const raw = route(exit, dest);
-          v.path = [from, exit, ...(raw ? lanePath(raw, exit).slice(1) : [{ x: dest.x, z: dest.z }])];
+          const lane = raw ? lanePath(raw, exit) : [exit, { x: dest.x, z: dest.z }];
+          v.path = filletPath([from, { x: v.x, z: lane[1]?.z ?? YARD_AISLE_Z }, ...lane.slice(1)], 4);
         } else {
           // The circuit: through its junctions, in one direction.
           const raw = this.routeVia(roadCentre(from), this.circuitVias(v, step), dest, route);
@@ -1072,9 +1109,15 @@ export class Simulation {
         v.phase = 'dwell';
         v.speed = 0;
         v.wait = this.dwellTime(v, step);
-        if (step === 'SLOT') v.h = -Math.PI / 2;
-        // Park aligned with the road (the last bit of the route is often a short lane merge).
-        else v.h = roadHeading(v.path, v.h);
+        // Park aligned with the road; with rounded curves the truck already arrives aligned, so
+        // this only corrects a small residual angle (never a visible jump).
+        if (step !== 'SLOT') {
+          const rh = roadHeading(v.path, v.h);
+          let d = rh - v.h;
+          while (d > Math.PI) d -= Math.PI * 2;
+          while (d < -Math.PI) d += Math.PI * 2;
+          if (Math.abs(d) < 0.35) v.h = rh;
+        }
         if (step === 'HOPPER' || step === 'BAL_IN' || step === 'BAL_OUT' || step === 'BAL_D' || step === 'BAL_DS' || step === 'SAMP' || step === 'OL' || step === 'ML') {
           this.stations[v.station].opsToday++;
         }
@@ -1390,7 +1433,8 @@ export class Simulation {
         jam: this.jam ? { x: r1(this.jam.x), z: r1(this.jam.z), level: this.jam.level, place: this.jam.place, cause: this.jam.cause, vehicles: this.jam.ids.length, minutes: Math.round(this.t - this.jam.since) } : null,
         evacuation: this.staff.evacuating,
       },
-      gates: { in: this.gates.in.open, out: this.gates.out.open },
+      // Booms: open/closed and since when (sim time), so the client animates them in step.
+      gates: { in: { open: this.gates.in.open, since: this.gates.in.since ?? 0 }, out: { open: this.gates.out.open, since: this.gates.out.since ?? 0 } },
       realism: this.realism,
       storages: this.storages.map((s) => ({ id: s.id, stock: Math.round(s.stock), cap: s.cap, pct: r1((s.stock / s.cap) * 100), temp: r1(s.temp), hum: r1(s.hum), outflow: r2(s.outflow) })),
       tanks: this.tanks.map((t) => ({ id: t.id, stock: Math.round(t.stock), cap: t.cap, pct: r1((t.stock / t.cap) * 100), temp: r1(t.temp), filling: t.inflow > 0 })),
@@ -1410,7 +1454,7 @@ export class Simulation {
       cep: this.cep.summary((t) => this.clock(t).label),
       kpi: Object.fromEntries(Object.entries(this.kpis()).map(([k, v]) => [k, r1(v)])),
       problems: [...this.problems.values()].map((p) => ({ ...p, since: this.clock(p.since).label, durMin: Math.round(this.t - p.since) })),
-      events: this.events.slice(0, 40).map((e) => ({ ...e, time: this.clock(e.t).label })),
+      events: this.events.slice(0, 40).map((e) => ({ ...e, time: this.clock(e.t, e.off).label })),
     };
   }
 
@@ -1530,6 +1574,7 @@ export class Simulation {
     if (cmd.randomFaults !== undefined) this.setRandomFaults(cmd.randomFaults);
     if (cmd.clearFaults) this.clearFaults();
     if (cmd.clearJam) return this.clearJam();
+    if (cmd.setHour !== undefined) return this.setHour(cmd.setHour);
     return true;
   }
 }

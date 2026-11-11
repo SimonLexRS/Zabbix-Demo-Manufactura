@@ -128,6 +128,12 @@ Las oficinas (`OFI`) son ahora **"Oficinas y sala de monitoreo"**:
 - **El gerente de planta:** su lugar es la sala, frente al muro. Si está en otro lado, viene de inmediato (en carrito si está lejos) y se queda mirando el dashboard mientras haya alguien en la sala.
 - **Dashboard real:** un clic en el muro lo abre en Zabbix (requiere `ZABBIX_WEB_URL` o *Configuración → Zabbix → URL web pública*).
 
+## Día y noche
+
+- **Auto / ☀ / ☾** (barra inferior): la iluminación de la vista 3D sigue el reloj de la planta o se fuerza de día o de noche. Solo cambia tu vista; se recuerda en el navegador.
+- **Hora**: adelanta el reloj de la planta hasta la hora elegida (nunca hacia atrás). Afecta a todos: el ritmo de llegada de camiones, el cierre del día y las métricas. La simulación en curso no salta: solo se corre el reloj.
+- De noche se encienden los faros de los vehículos y los postes de luz de la portería, la playa y los retornos.
+
 ## Realismo: tránsito, personal y órdenes de trabajo
 
 **Tránsito** (`js/sim/traffic.js`):
@@ -140,7 +146,9 @@ Las oficinas (`OFI`) son ahora **"Oficinas y sala de monitoreo"**:
 - **Ingreso**: forman fila en la banquina de la calzada sur (fuera del carril) y entran a la portería de a uno, por el carril de entrada del acceso. Los que salen usan el carril de salida.
 - **Barreras de portería**: una por carril. El camión se detiene con el paragolpes antes del brazo; la barrera sube cuando termina el control y baja cuando el camión pasó entero. Ningún camión atraviesa una barrera baja.
 - **Tránsito de paso en RN4**: autos, camionetas y furgonetas de la simulación, cada sentido en su calzada. Frenan detrás de los camiones y ceden el paso cuando un camión se incorpora (salida de planta o retorno). El camión solo se incorpora cuando ningún auto está en ese tramo ni demasiado cerca para frenar.
-- **No bloquear el cruce**: nadie entra a un cruce si no tiene lugar para salir de él.
+- **No bloquear el cruce**: nadie entra a un cruce si no tiene lugar para salir de él, salvo que el de adelante esté detenido en una estación y se lo pueda sobrepasar (así un camión que lleva reservada la balanza no queda esperando detrás de otro que espera esa misma balanza).
+- **Curvas**: cada esquina de la ruta se redondea (radio ~6 u) con su velocidad máxima, así la cabina y el acoplado doblan sobre el carril. En 3D el camión solo gira lo que le permite su velocidad: no pivotea en el lugar.
+- **Playa de paso**: los camiones entran a las bahías desde la calle C4 y salen derecho a la C3, sin maniobras.
 - **Destrabes**: si se forma un ciclo de espera, sale primero el que se retira de planta. Si un cruce queda trabado, el supervisor hace de señalero.
 - **Atascos**: se detectan solos (vehículos en vía que no avanzan, sin contar la fila normal de una estación) y se resuelven en dos niveles: 1) el supervisor ordena el paso; 2) a los 4 min, control de tránsito libera las reservas de cruce trabadas y da paso con prioridad, de a uno (en RN4 detiene a los autos). Cada atasco activa la falla `traffic_jam` y las métricas `traffic_jam_active`, `traffic_jams_today` y `traffic_jam_max_wait_min`, con su trigger en Zabbix. El botón **Despejar atasco** (portería o camión detenido) fuerza el nivel 2 al instante.
 - **Incidentes viales**: con fallas aleatorias activas, cada pocas horas simuladas (por defecto 8 por día, `ROAD_INCIDENTS` o Configuración → Realismo) falla el freno de un camión o un conductor se distrae.

@@ -82,8 +82,15 @@
       <div id="faultItems" class="pop-body"></div>
     </div>
 
+    <div id="hourList" class="menu-pop" role="dialog" aria-label="Hora de la planta">
+      <div class="pop-head"><b>Hora de la planta</b><button class="icon pop-close" aria-label="Cerrar">✕</button></div>
+      <div id="hourItems" class="pop-body"></div>
+    </div>
+
     <nav class="controls" aria-label="Controles">
       <div id="speeds" class="seg" title="Velocidad de simulación"></div>
+      <div id="daylight" class="seg" title="Iluminación de la vista 3D (solo para ti)"></div>
+      <button data-menu="hourList" title="Adelantar el reloj de la planta a una hora">Hora</button>
       <button data-menu="tourList">Recorrido</button>
       <button id="btnProblems" data-menu="faultList" class="danger">Fallas</button>
       <button id="btnConfig" class="cfg">Configuración</button>

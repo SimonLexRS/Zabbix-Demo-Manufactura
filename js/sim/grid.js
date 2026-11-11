@@ -248,5 +248,54 @@ export function lanePath(raw, from, off = 1.7) {
   const len = Math.hypot(dx, dz) || 1;
   const k = Math.min(6, len / 2) / len;
   const merge = { x: lane[0].x + dx * k, z: lane[0].z + dz * k };
-  return [{ x: from.x, z: from.z }, merge, ...lane.slice(1)];
+  return filletPath([{ x: from.x, z: from.z }, merge, ...lane.slice(1)]);
+}
+
+// Rounds every corner of a polyline with a curve (quadratic Bézier between the tangent points,
+// which is close to a circular arc), so a truck turns along its lane instead of pivoting on the
+// corner and cutting it with the trailer. The radius shrinks when the legs are short. Each
+// curve point carries the speed allowed in it (vmax, lateral acceleration ~4 u/s²).
+export function filletPath(pts, r = 6) {
+  if (!pts || pts.length < 3) return pts;
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const c = pts[i + 1];
+    const l1 = Math.hypot(b.x - a.x, b.z - a.z);
+    const l2 = Math.hypot(c.x - b.x, c.z - b.z);
+    if (b.vmax !== undefined || l1 < 0.5 || l2 < 0.5) {
+      out.push(b);
+      continue;
+    }
+    const d1 = { x: (b.x - a.x) / l1, z: (b.z - a.z) / l1 };
+    const d2 = { x: (c.x - b.x) / l2, z: (c.z - b.z) / l2 };
+    const ang = Math.acos(Math.max(-1, Math.min(1, d1.x * d2.x + d1.z * d2.z)));
+    if (ang < 0.3 || ang > 2.9) {
+      out.push(b); // almost straight, or a reversal (handled as a manoeuvre)
+      continue;
+    }
+    const tanHalf = Math.tan(ang / 2);
+    const rr = Math.min(r, (l1 * 0.5) / tanHalf, (l2 * 0.5) / tanHalf);
+    if (rr < 1.2) {
+      out.push(b);
+      continue;
+    }
+    const t = rr * tanHalf;
+    const p1 = { x: b.x - d1.x * t, z: b.z - d1.z * t };
+    const p2 = { x: b.x + d2.x * t, z: b.z + d2.z * t };
+    const vmax = Math.max(3, Math.sqrt(4 * rr));
+    const n = Math.max(3, Math.ceil(ang / 0.2));
+    out.push({ ...p1, vmax });
+    for (let k = 1; k < n; k++) {
+      const u = k / n;
+      const w0 = (1 - u) * (1 - u);
+      const w1 = 2 * u * (1 - u);
+      const w2 = u * u;
+      out.push({ x: w0 * p1.x + w1 * b.x + w2 * p2.x, z: w0 * p1.z + w1 * b.z + w2 * p2.z, vmax });
+    }
+    out.push({ ...p2, vmax });
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
 }

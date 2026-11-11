@@ -482,6 +482,11 @@ const CAB_COLORS = [0xf5f5f5, 0xc0392b, 0x2563a8, 0xe0a019, 0x2f7d4a, 0x8a8f96, 
 const G = {};
 const geo = (key, make) => (G[key] ??= make());
 let VM = null;
+// Night: vehicle headlights glow brighter (shared material of every truck and car).
+export function setNightLights(night) {
+  vmats().head.emissiveIntensity = night ? 3.2 : 0.6;
+}
+
 function vmats() {
   if (VM) return VM;
   const std = (o) => new THREE.MeshStandardMaterial(o);

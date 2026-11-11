@@ -440,7 +440,6 @@ export class PlantView {
     this.boilersOn = s.boilers.filter((b) => b.on).length;
     this.crushing = crushing;
     this.stationState = s.stations;
-    if (s.gates) this.gateOpen = s.gates;
 
     // Alarm beacons for active problems.
     const want = new Map();
@@ -517,7 +516,11 @@ export class PlantView {
       const moved = px === undefined ? 0 : Math.hypot(pos.x - px, pos.z - pz);
       const dir = curveDir(P0.get(v.id) || va, va, v, P3.get(v.id) || v, alpha);
       const want = dir === null ? lerpAngle(va.h, v.h, Math.min(1, alpha)) : dir;
-      ud.yaw = ud.yaw === undefined ? want : turnToward(ud.yaw, want, ease(7), 2.4 * k * dt);
+      // A truck can only turn as fast as it rolls (no pivoting on the spot): the yaw rate is
+      // limited by its speed over a minimum turning radius, with a small floor for manoeuvres.
+      const rollU = Math.max(moved / Math.max(dt, 1e-3), (v.speedKmh ?? 0) / 2.6);
+      const maxRate = v.kind === 'car' ? 2.4 * k : Math.max(0.5 * k, rollU / 3);
+      ud.yaw = ud.yaw === undefined ? want : turnToward(ud.yaw, want, ease(7), maxRate * dt);
       // Overtaking / priority passing: drive in the opposite lane (shifted to the left).
       ud.lat += ((v.passing ? 3.4 : 0) - ud.lat) * ease(3 * k);
       g.position.set(pos.x + Math.sin(ud.yaw) * ud.lat, 0, pos.z - Math.cos(ud.yaw) * ud.lat);
@@ -551,7 +554,7 @@ export class PlantView {
         load.scale.y = l * 1.6;
         load.position.y = 1.3 + (l * 1.6) / 2;
       }
-      ud.brakeMat.emissiveIntensity = v.braking || v.crashed || (!v.moving && v.speedKmh === 0 && v.waitReason) ? 2.2 : 0.12;
+      ud.brakeMat.emissiveIntensity = v.braking || v.crashed || (!v.moving && v.speedKmh === 0 && v.waitReason) ? 2.2 : this.night ? 0.9 : 0.12;
       // Warning triangle behind a crashed truck.
       if (v.crashed && !ud.triangle) {
         const tri = B.warningTriangle();
@@ -631,17 +634,28 @@ export class PlantView {
     if (o.element.textContent !== text) o.element.textContent = text;
   }
 
-  frame(dt, speed) {
+  frame(dt, speed, playT = null, night = false) {
     this.time += dt;
-    // Gate barriers: raise/lower towards the state of the simulation (~1 s at 1x).
+    // Gate barriers follow the simulation clock: the boom takes 0.3 simulated minutes to go up
+    // or down — exactly what the truck waits at the line — so it is up when the truck moves,
+    // at any simulation speed.
     if (this.gateBooms) {
-      const k = Math.max(1, Math.min(speed || 1, 8));
       for (const boom of Object.values(this.gateBooms)) {
-        const target = this.gateOpen?.[boom.userData.k] ? boom.userData.up : 0;
-        const d = target - boom.rotation.x;
-        const step = dt * 2.2 * k;
-        boom.rotation.x += Math.abs(d) <= step ? d : Math.sign(d) * step;
+        const g = this.gateOpen?.[boom.userData.k];
+        let f;
+        if (g && typeof g === 'object' && playT !== null) {
+          const p = Math.max(0, Math.min(1, (playT - (g.since ?? 0)) / 0.3));
+          f = g.open ? p : 1 - p;
+        } else f = g ? 1 : 0;
+        const target = boom.userData.up * f;
+        // Light smoothing between frames only.
+        boom.rotation.x += (target - boom.rotation.x) * Math.min(1, dt * 12);
       }
+    }
+    // Night: headlights and brake lights glow; street lights on.
+    if (night !== this.night) {
+      this.night = night;
+      B.setNightLights(night);
     }
     // Monitoring room: the roof fades out when looking into the room.
     if (this.room && this.camera) {
