@@ -1,7 +1,27 @@
 // Ground, roads, river, trees, sky and day/night lighting.
 import * as THREE from 'three';
-import { ROADS, SITE } from '../sim/layout.js';
+import { ROADS, SITE, RN4 } from '../sim/layout.js';
 import { mesh, box, setMaterials } from './builders.js';
+
+function signTex(text) {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 92;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1f5fbf';
+  g.fillRect(0, 0, 256, 92);
+  g.strokeStyle = '#ffffff';
+  g.lineWidth = 6;
+  g.strokeRect(5, 5, 246, 82);
+  g.fillStyle = '#ffffff';
+  g.font = 'bold 40px sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(`↶ ${text}`, 128, 48);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 
 export function createEnvironment(scene, M) {
   setMaterials(M);
@@ -27,19 +47,54 @@ export function createEnvironment(scene, M) {
     const [x0, z0, x1, z1] = r.rect;
     const w = x1 - x0;
     const d = z1 - z0;
-    if (r.highway) {
+    if (r.median) {
+      // Opening in the median (retorno): plain asphalt joining both carriageways.
+      const m = flat(w, d, M.asphalt, (x0 + x1) / 2, (z0 + z1) / 2, 0.055);
+      m.material = M.asphalt.clone();
+      m.material.map = null;
+      m.material.color.setHex(0x3e4145);
+    } else if (r.highway) {
+      // One carriageway: driving lane + shoulder lane, marked edges and a dashed divider.
       const m = flat(w, d, M.asphalt, (x0 + x1) / 2, (z0 + z1) / 2, 0.06);
       m.material = M.asphalt.clone();
       m.material.map = M.asphalt.map.clone();
       m.material.map.repeat.set(1, d / 40);
       m.material.map.needsUpdate = true;
-      // Shoulders.
-      flat(1.2, d, M.gravel, x0 - 0.6, (z0 + z1) / 2, 0.05);
-      flat(1.2, d, M.gravel, x1 + 0.6, (z0 + z1) / 2, 0.05);
+      // Outer shoulder (gravel).
+      if (r.dir === 's') flat(1.2, d, M.gravel, x0 - 0.6, (z0 + z1) / 2, 0.05);
+      else flat(1.2, d, M.gravel, x1 + 0.6, (z0 + z1) / 2, 0.05);
     } else {
       flat(w, d, r.yard ? M.concrete : M.gravel, (x0 + x1) / 2, (z0 + z1) / 2, r.yard ? 0.04 : 0.05);
     }
   }
+
+  // RN4 median: kerbs along both edges, interrupted at the retornos, and "RETORNO" signs.
+  const median = new THREE.Group();
+  const gaps = ROADS.filter((r) => r.median).map((r) => [r.rect[1], r.rect[3]]).sort((a, b) => a[0] - b[0]);
+  const spans = [];
+  let from = -184;
+  for (const [g0, g1] of gaps) {
+    spans.push([from, g0]);
+    from = g1;
+  }
+  spans.push([from, 184]);
+  for (const [a, b] of spans) {
+    for (const x of [RN4.sX1 + 0.25, RN4.nX0 - 0.25]) box(median, 0.5, 0.35, b - a, M.concrete, x, 0.17, (a + b) / 2, { cast: false });
+  }
+  const signMat = new THREE.MeshStandardMaterial({ map: signTex('RETORNO'), roughness: 0.6 });
+  const sign = (x, z, rot) => {
+    const g = new THREE.Group();
+    box(g, 0.2, 3, 0.2, M.steel, 0, 1.5, 0);
+    const plate = mesh(new THREE.PlaneGeometry(3.6, 1.3), signMat, 0, 3.2, 0.12, { cast: false });
+    g.add(plate);
+    g.position.set(x, 0, z);
+    g.rotation.y = rot;
+    median.add(g);
+  };
+  // Before each opening, facing the traffic that uses it.
+  sign(RN4.nX1 + 1.5, RN4.retN + 30, 0); // northbound, approaching the retorno norte
+  sign(RN4.sX0 - 1.5, RN4.retS - 30, Math.PI); // southbound, approaching the retorno sur
+  scene.add(median);
 
   // Perimeter fence.
   const fenceH = 2.2;
@@ -101,7 +156,7 @@ export function createEnvironment(scene, M) {
   for (let z = SITE.z0; z < SITE.z1; z += 9) if (Math.random() < 0.6) spots.push([SITE.x0 - 6, z, rnd(0.8, 1.1)]);
   for (let x = SITE.x0; x < SITE.x1; x += 8) spots.push([x, SITE.z1 + 7, rnd(0.7, 1)]);
   for (let i = 0; i < 160; i++) {
-    const x = rnd(92, 420);
+    const x = rnd(RN4.nX1 + 8, 420); // east of the highway
     const z = rnd(-440, 440);
     if (Math.random() < 0.6) spots.push([x, z, rnd(0.8, 1.6)]);
   }

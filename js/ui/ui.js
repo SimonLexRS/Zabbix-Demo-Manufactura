@@ -481,6 +481,13 @@ function sparkline(canvas, data, { min, max, unit = '' }) {
 // Problem point linked to an asset (detail panel shows a toggle for it).
 const ASSET_PROBLEM = { BAL_IN: 'bal_in_net', BAL_OUT: 'bal_out_net', GATE: 'gate_net', SAMP: 'samp_fault', OL: 'ol_arm', H1: 'noria_N1', H2: 'noria_N2', N1: 'noria_N1', N2: 'noria_N2', B1: 'boiler_B1', B2: 'boiler_B2', EXT: 'hexane_leak', PREP: 'prep_power', S2: 'silo_hot_S2' };
 
+// "Despejar atasco" (traffic control clears the jam / the broken-down truck) + the jam fault.
+function jamActions(s) {
+  const jam = s.traffic?.jam;
+  const active = (s.problemCatalog || []).some((p) => p.id === 'traffic_jam' && p.state);
+  return [...(jam || active ? [{ label: 'Despejar atasco', clearJam: true }] : []), ...problemActions(s, 'traffic_jam')];
+}
+
 function problemActions(s, ...ids) {
   return ids
     .map((id) => (s.problemCatalog || []).find((p) => p.id === id))
@@ -566,7 +573,17 @@ export function describe(pick, s) {
     const extra = [];
     if (id === 'H1' || id === 'H2') extra.push(['Descargando', flowing ? 'Sí' : 'No', '']);
     if (id === 'SAMP') extra.push(['Rechazos hoy', fmt(k.rejected), 'planta.trucks_rejected_today']);
-    if (id === 'GATE') extra.push(['Camiones en RN4', fmt(k.roadQueue), 'planta.trucks_waiting_road'], ['Ingresos hoy', fmt(k.trucksIn), 'planta.trucks_received_today']);
+    if (id === 'GATE') {
+      const j = s.traffic?.jam;
+      extra.push(
+        ['Camiones en RN4', fmt(k.roadQueue), 'planta.trucks_waiting_road'],
+        ['Ingresos hoy', fmt(k.trucksIn), 'planta.trucks_received_today'],
+        ['Barrera de entrada', s.gates?.in ? 'Arriba' : 'Abajo', ''],
+        ['Barrera de salida', s.gates?.out ? 'Arriba' : 'Abajo', ''],
+        ['Atasco', j ? `${j.place} · ${j.vehicles} veh. · ${j.minutes} min · nivel ${j.level}` : 'No', 'planta.traffic_jam_active'],
+        ['Atascos hoy', fmt(s.traffic?.traffic_jams_today ?? 0), 'planta.traffic_jams_today'],
+      );
+    }
     return {
       kind: 'Punto de operación',
       title: def.name,
@@ -581,7 +598,7 @@ export function describe(pick, s) {
         ['Operaciones hoy', fmt(st?.ops), `planta.station.operations_today[${id}]`],
         ...extra,
       ],
-      actions: problemActions(s, ASSET_PROBLEM[id]),
+      actions: [...problemActions(s, ASSET_PROBLEM[id]), ...(id === 'GATE' ? jamActions(s) : [])],
     };
   }
   if (kind === 'truck') {
@@ -597,7 +614,7 @@ export function describe(pick, s) {
     }
     const type = { soy: 'Camión granelero · soya', oil: 'Cisterna · aceite crudo', meal: 'Camión · harina de soya', tow: 'Grúa de mantenimiento' }[v.kind];
     const WAIT = { vehiculo: 'detenido detrás de otro vehículo', cruce: 'esperando paso en el cruce', peaton: 'cediendo el paso a un peatón' };
-    const drive = v.crashed ? 'Colisionado' : v.brakeFail ? 'Sin frenos' : v.passing ? 'Sobrepasando' : v.braking ? 'Frenando' : v.speedKmh > 1 ? 'En marcha' : v.waitReason ? `Detenido: ${WAIT[v.waitReason]}` : 'Detenido';
+    const drive = v.crashed ? 'Colisionado' : v.stalled ? 'Varado (falla mecánica)' : v.brakeFail ? 'Sin frenos' : v.passing ? 'Sobrepasando' : v.braking ? 'Frenando' : v.speedKmh > 1 ? 'En marcha' : v.waitReason ? `Detenido: ${WAIT[v.waitReason]}` : 'Detenido';
     const rows = [
       ['Velocidad', `${v.speedKmh} km/h`, ''],
       ['Conducción', drive, ''],
@@ -611,10 +628,11 @@ export function describe(pick, s) {
     ];
     if (v.sample) rows.push(['Calado: humedad', `${fmt(v.sample.hum, 1)} %`, ''], ['Calado: impurezas', `${fmt(v.sample.imp, 1)} %`, '']);
     if (v.target) rows.push(['Destino de descarga', STORAGES.find((x) => x.id === v.target)?.name ?? v.target, '']);
-    const bad = v.rejected || v.crashed || v.brakeFail;
+    const bad = v.rejected || v.crashed || v.brakeFail || v.stalled;
+    const stuck = v.stalled || (s.traffic?.jam && !v.moving && v.waitReason);
     return {
-      kind: type, title: v.plate, sub: v.label, status: v.crashed ? 'Colisionado' : v.brakeFail ? 'Falla de frenos' : v.rejected ? 'Rechazado' : v.damaged ? 'Dañado, retirándose' : drive,
-      statusClass: bad ? 'bad' : v.damaged || v.braking ? 'warn' : 'ok', rows, actions: [{ label: 'Seguir con cámara', follow: id }],
+      kind: type, title: v.plate, sub: v.label, status: v.crashed ? 'Colisionado' : v.stalled ? 'Varado: bloquea la vía' : v.brakeFail ? 'Falla de frenos' : v.rejected ? 'Rechazado' : v.damaged ? 'Dañado, retirándose' : drive,
+      statusClass: bad ? 'bad' : v.damaged || v.braking ? 'warn' : 'ok', rows, actions: [{ label: 'Seguir con cámara', follow: id }, ...(stuck ? jamActions(s) : [])],
     };
   }
   if (kind === 'person') {

@@ -69,6 +69,9 @@ const PLANT = [
   ['traffic_avg_speed_kmh', 'Tránsito: velocidad media', 'km/h', 'FLOAT', 'transito'],
   ['traffic_flagman_today', 'Tránsito: intervenciones de señalero hoy', '', 'UNSIGNED', 'transito'],
   ['traffic_overtakes_today', 'Tránsito: sobrepasos hoy', '', 'UNSIGNED', 'transito'],
+  ['traffic_jam_active', 'Tránsito: atasco en curso', '', 'UNSIGNED', 'transito'],
+  ['traffic_jams_today', 'Tránsito: atascos hoy', '', 'UNSIGNED', 'transito'],
+  ['traffic_jam_max_wait_min', 'Tránsito: espera máxima de un vehículo detenido', 'm', 'FLOAT', 'transito'],
   ['wo_open', 'Mantenimiento: órdenes de trabajo abiertas', '', 'UNSIGNED', 'mantenimiento'],
   ['wo_in_progress', 'Mantenimiento: OT en curso', '', 'UNSIGNED', 'mantenimiento'],
   ['wo_completed_today', 'Mantenimiento: OT completadas hoy', '', 'UNSIGNED', 'mantenimiento'],
@@ -133,7 +136,8 @@ function build(mode) {
     trucks_waiting_road: [{ expression: `last(${ref('planta.trucks_waiting_road')})>{$PLANTA.ROADQ.MAX}`, _id: 'road_queue', name: 'Cola de camiones en RN4 (> {$PLANTA.ROADQ.MAX})', priority: 'WARNING' }],
     traffic_near_misses_today: [{ expression: `change(${ref('planta.traffic_near_misses_today')})>0`, _id: 'near_miss', name: 'Casi accidente entre camión y peatón', priority: 'HIGH', manual_close: 'YES', description: 'Un camión frenó al límite o sin frenos cerca de una persona. Revisar con HSE y cerrar manualmente.' }],
     traffic_vehicles_stopped: [{ expression: `min(${ref('planta.traffic_vehicles_stopped')},3m)>{$PLANTA.TRAFFIC.STOPPED.MAX}`, _id: 'traffic_stopped', name: 'Tránsito detenido en vías internas (> {$PLANTA.TRAFFIC.STOPPED.MAX} vehículos)', priority: 'AVERAGE' }],
-    wo_unassigned_max_min: [{ expression: `last(${ref('planta.wo_unassigned_max_min')})>{$PLANTA.WO.UNASSIGNED.MAX}`, _id: 'wo_unassigned', name: 'Orden de trabajo sin técnico por más de {$PLANTA.WO.UNASSIGNED.MAX} min', priority: 'AVERAGE' }],
+    traffic_jam_active: [{ expression: `last(${ref('planta.traffic_jam_active')})=1`, _id: 'traffic_jam', name: 'Atasco en vías de la planta o en RN4', priority: 'AVERAGE', description: 'Vehículos detenidos que no avanzan. El supervisor ordena el paso y, si no alcanza, control de tránsito despeja la vía.' }],
+        wo_unassigned_max_min: [{ expression: `last(${ref('planta.wo_unassigned_max_min')})>{$PLANTA.WO.UNASSIGNED.MAX}`, _id: 'wo_unassigned', name: 'Orden de trabajo sin técnico por más de {$PLANTA.WO.UNASSIGNED.MAX} min', priority: 'AVERAGE' }],
     staff_evacuation: [{ expression: `last(${ref('planta.staff_evacuation')})=1`, _id: 'evacuation', name: 'Evacuación en curso por alarma de gas', priority: 'DISASTER' }],
   };
 
@@ -232,12 +236,12 @@ function build(mode) {
   const AREA = {
     steam_low: 'energia', crush_low: 'produccion', meal_hex: 'produccion', lel_disaster: 'extraccion', lel_warn: 'extraccion', extractor_stopped: 'extraccion',
     plc_nodata: 'extraccion', hexane_low: 'extraccion', oil_full: 'despacho', road_queue: 'recepcion', trucks_stopped: '{#AREA}', silo_temp: 'acopio',
-    near_miss: 'transito', traffic_stopped: 'transito', wo_unassigned: 'mantenimiento', evacuation: 'extraccion',
+    near_miss: 'transito', traffic_stopped: 'transito', traffic_jam: 'transito', wo_unassigned: 'mantenimiento', evacuation: 'extraccion',
   };
   const SYMPTOM = {
     steam_low: 'vapor_bajo', crush_low: 'molienda_baja', meal_hex: 'hexano_en_harina', lel_disaster: 'lel_alto', lel_warn: 'lel_elevado', extractor_stopped: 'extractor_detenido',
     plc_nodata: 'plc_sin_datos', hexane_low: 'hexano_bajo', oil_full: 'tanques_llenos', road_queue: 'cola_rn4', trucks_stopped: 'camion_detenido', silo_temp: 'temp_grano',
-    near_miss: 'casi_accidente', traffic_stopped: 'transito_detenido', wo_unassigned: 'ot_sin_tecnico', evacuation: 'evacuacion',
+    near_miss: 'casi_accidente', traffic_stopped: 'transito_detenido', traffic_jam: 'atasco', wo_unassigned: 'ot_sin_tecnico', evacuation: 'evacuacion',
   };
   const PROBLEM_AREA = { BAL_IN: 'recepcion', BAL_OUT: 'recepcion', GATE: 'recepcion', SAMP: 'recepcion', N1: 'recepcion', N2: 'recepcion', B1: 'energia', B2: 'energia', EXT: 'extraccion', S2: 'acopio', PREP: 'produccion', OL: 'despacho', VIA: 'transito' };
   for (const p of PROBLEMS) AREA[`problem:${p.id}`] = PROBLEM_AREA[p.src] || 'planta';

@@ -5,7 +5,7 @@
 //
 // Units: distance in world units (1 u ≈ 1.5 m); time in simulated minutes, which
 // at 1x is one real second, so speeds read as "units per second" on screen.
-import { ROADS } from './layout.js';
+import { ROADS, RN4, PLANT_EDGE_X, GATE_LANES } from './layout.js';
 
 export const KMH = 2.6; // display factor: u/s → km/h (internal limit ~25 km/h)
 const ACC = 2.5; // u/s² acceleration
@@ -31,8 +31,16 @@ export function buildIntersections() {
       const z1 = Math.min(a.rect[3], b.rect[3]);
       if (x1 > x0 && z1 > z0) boxes.push({ id: boxes.length, name: `${a.id}×${b.id}`, x0: x0 - 1, z0: z0 - 1, x1: x1 + 1, z1: z1 + 1 });
     }
-  // RN4 × plant access: trucks turning in from the shoulder or out of the gate cross both lanes.
-  boxes.push({ id: boxes.length, name: 'RN4×ACCESO', x0: 69.5, z0: 63, x1: 78.5, z1: 79, highway: true }); // driving lanes only
+  // RN4 (divided highway): each box covers only the driving lane a truck merges into, so the
+  // cars of the other carriageway never stop for it.
+  //  - trucks leaving the gate turn right into the southbound lane;
+  //  - retorno norte: U-turn into the southbound lane; retorno sur: U-turn into the northbound lane.
+  const lane = (x) => [x - 2.5, x + 2.5];
+  const [sx0, sx1] = lane(RN4.sLane);
+  const [nx0, nx1] = lane(RN4.nLane);
+  boxes.push({ id: boxes.length, name: 'RN4×ACCESO', x0: sx0, z0: GATE_LANES.out.z + 1, x1: sx1, z1: 86, highway: true });
+  boxes.push({ id: boxes.length, name: 'RETORNO_N', x0: sx0, z0: RN4.retN - 9, x1: sx1, z1: RN4.retN + 9, highway: true });
+  boxes.push({ id: boxes.length, name: 'RETORNO_S', x0: nx0, z0: RN4.retS - 9, x1: nx1, z1: RN4.retS + 10, highway: true });
   return boxes;
 }
 
@@ -56,7 +64,8 @@ export class Traffic {
   zoneSpeed(v) {
     const cfg = this.sim.realism;
     if (v.kind === 'car') return v.maxSpeed ?? 16;
-    if (v.x > 62) return 14; // RN4 / access
+    if (v.x > PLANT_EDGE_X + 18) return 14; // RN4
+    if (v.x > PLANT_EDGE_X - 2) return 7; // access road and gate
     if (inYard(v.x, v.z)) return 5.5; // yard
     return 11 * cfg.speedFactor;
   }
@@ -83,6 +92,21 @@ export class Traffic {
       pz = p.z;
     }
     return { remain, corner };
+  }
+
+  // Speed allowed by the points ahead that carry a speed cap (U-turns at the retornos).
+  capSpeed(v, target) {
+    let d = 0;
+    let px = v.x;
+    let pz = v.z;
+    for (let i = v.pi; i < v.path.length && d < 40; i++) {
+      const p = v.path[i];
+      d += Math.hypot(p.x - px, p.z - pz);
+      px = p.x;
+      pz = p.z;
+      if (p.vmax !== undefined) target = Math.min(target, Math.sqrt(p.vmax * p.vmax + 2 * BRAKE * Math.max(0, d - 2)));
+    }
+    return target;
   }
 
   direction(v) {
@@ -150,7 +174,7 @@ export class Traffic {
       const fwd = this.along(segs, o.x, o.z, LANE_BAND, o.phase === 'travel' ? 0.6 : LANE_BAND, o.h);
       if (fwd === null || fwd <= 0.5) continue;
       const gap = fwd - TRUCK_LEN;
-      if (!best || gap < best.gap) best = { gap, speed: o.speed ?? 0, obj: o, isPerson: false, stationary: (o.speed ?? 0) < 0.2 && o.phase !== 'travel' };
+      if (!best || gap < best.gap) best = { gap, speed: o.speed ?? 0, obj: o, isPerson: false, stationary: (o.speed ?? 0) < 0.2 && o.phase !== 'travel' && !o.stalled };
     }
     for (const p of this.sim.people) {
       const fwd = this.along(segs, p.x, p.z, 2, 2);
@@ -165,7 +189,7 @@ export class Traffic {
   // down): never one waiting in the same line as us, never when our destination is right there,
   // never inside the truck yard.
   canOvertake(v, L, remain) {
-    if (v.kind === 'car' || !L || L.isPerson || L.obj.crashed || !L.stationary) return false;
+    if (v.kind === 'car' || !L || L.isPerson || L.obj.crashed || L.obj.stalled || !L.stationary) return false;
     if (inYard(v.x, v.z) || inYard(L.obj.x, L.obj.z)) return false;
     if (remain < L.gap + TRUCK_LEN * 2 + S0) return false;
     // A truck holding its station reservation may pass whoever waits for that station
@@ -270,18 +294,21 @@ export class Traffic {
 
   // Who goes first in the last detected cycle: trucks leaving the plant, then the oldest.
   cycleWinner() {
-    const leaving = (o) => (['GATE_OUT', 'EXIT_N', 'EXIT_S', 'BAL_OUT'].includes(o.plan[o.step]) ? 2 : 1);
+    const leaving = (o) => (['GATE_OUT', 'EXIT_N', 'EXIT_S', 'BAL_OUT', 'BAL_DS'].includes(o.plan[o.step]) ? 2 : 1);
     return [...this.cycle].sort((a, b) => leaving(b) - leaving(a) || parseInt(a.id.slice(1), 10) - parseInt(b.id.slice(1), 10))[0];
   }
 
   // Moves a travelling vehicle one step. Returns true when it reached the end of its path.
   drive(v, dt) {
     const sim = this.sim;
-    if (v.crashed) {
+    if (v.crashed || v.stalled) {
       v.speed = 0;
       v.braking = false;
+      v.blockedFor = 0;
       return false;
     }
+    // Priority: the tow truck, or a vehicle the jam clearance lets through.
+    const prio = v.priority || sim.t < (v.jamPriorityUntil ?? 0);
     v.speed ??= 0;
     const { fx, fz } = this.direction(v);
     const { remain, corner } = this.pathInfo(v);
@@ -294,6 +321,7 @@ export class Traffic {
       const vc = corner.angle > 1 ? 4.5 : 7;
       target = Math.min(target, Math.sqrt(vc * vc + 2 * BRAKE * corner.d));
     }
+    target = this.capSpeed(v, target);
     let reason = null;
 
     // Car following / pedestrians.
@@ -306,7 +334,7 @@ export class Traffic {
     } else if (L) {
       const vf = Math.sqrt(Math.max(0, L.speed * L.speed + 2 * BRAKE * (L.gap - S0 - HEADWAY * v.speed * 0.3)));
       // Overtaking a stopped vehicle, or a priority vehicle (tow) passing using the other lane.
-      const overtaking = !L.isPerson && !L.obj.crashed && ((sim.t < (v.overtakeUntil ?? 0) && this.canOvertake(v, L, remain)) || v.priority);
+      const overtaking = !L.isPerson && !L.obj.crashed && ((sim.t < (v.overtakeUntil ?? 0) && this.canOvertake(v, L, remain)) || prio);
       v.passing = overtaking && (L.gap < 14 || sim.t < (v.overtakeUntil ?? 0));
       if (!ignoring && !overtaking && vf < target) {
         target = vf;
@@ -359,8 +387,9 @@ export class Traffic {
         const exit = chain[chain.length - 1].exit + 1.5;
         if (L.gap < exit + TRUCK_LEN / 2 + S0 / 2 && remain > exit + TRUCK_LEN / 2) free = false;
       }
-      // The supervisor (flagman) only directs plant trucks, and never across RN4 traffic.
-      const flagman = sim.t < (v.flagmanUntil ?? 0) && !chain.some((b) => b.highway);
+      // The supervisor (flagman) only directs plant trucks, and never across RN4 traffic; a jam
+      // clearance (traffic control) may also hold the highway traffic.
+      const flagman = (sim.t < (v.flagmanUntil ?? 0) && !chain.some((b) => b.highway)) || sim.t < (v.forceUntil ?? 0);
       if (free || flagman || ignoring) {
         for (const b of chain) if (this.truckWaiting.get(b.id)?.id === v.id) this.truckWaiting.delete(b.id);
         for (const b of chain) {
@@ -400,7 +429,7 @@ export class Traffic {
     // Move. A driver who is paying attention never closes in below half the standstill gap
     // (this keeps queues tidy even around corners); only an unbraked truck can hit.
     let dist = v.speed * dt;
-    if (L && !ignoring && !v.passing && !v.priority) {
+    if (L && !ignoring && !v.passing && !prio) {
       const room = Math.max(0, L.gap - (L.isPerson ? 0.5 : S0 * 0.5) + L.speed * dt);
       if (dist > room) {
         dist = room;
@@ -421,7 +450,7 @@ export class Traffic {
     if (!L) v.passing = sim.t < (v.overtakeUntil ?? 0) && v.speed > 0.5;
     if (L) {
       const newGap = L.gap - v.speed * dt + L.speed * dt;
-      if (!L.isPerson && !v.passing && !v.priority && newGap <= 0 && sim.realism.collisions && ignoring) {
+      if (!L.isPerson && !v.passing && !prio && newGap <= 0 && sim.realism.collisions && ignoring) {
         sim.collide(v, L.obj);
         return false;
       }
@@ -429,7 +458,7 @@ export class Traffic {
     }
 
     // Distraction (reaction delay) appears now and then while driving.
-    if (sim.realism.collisions && v.kind !== 'car' && v.speed > 3 && Math.random() < (sim.realism.distractionPerHour / 60) * dt) v.distractedUntil = sim.t + 0.4 + Math.random() * 0.6;
+    if (sim.realism.collisions && v.kind !== 'car' && v.x < PLANT_EDGE_X && v.speed > 3 && Math.random() < (sim.realism.distractionPerHour / 60) * dt) v.distractedUntil = sim.t + 0.4 + Math.random() * 0.6;
 
     // Waiting management: overtake stopped obstacles, flagman for blocked crossings.
     if (v.speed < 0.3) v.blockedFor = (v.blockedFor ?? 0) + dt;
@@ -452,6 +481,110 @@ export class Traffic {
       v.blockedFor = 0;
     }
     return arrived;
+  }
+
+  // ───────────── jams (atascos) ─────────────
+  // A vehicle is stuck when it is travelling but has not moved for a while.
+  isStuck(o, min = 2) {
+    return !o.gone && o.phase === 'travel' && !o.crashed && (o.stalled || ((o.speed ?? 0) < 0.3 && (o.blockedFor ?? 0) >= min));
+  }
+
+  // Groups stuck vehicles by what holds them (following the chain of vehicles each one waits
+  // for). A normal queue for a station (the head is weighing, loading, waiting its turn) is not a
+  // jam, nor what a collision blocks (that has its own procedure). Returns the worst group.
+  findJam() {
+    const sim = this.sim;
+    const byId = new Map(sim.vehicles.map((o) => [o.id, o]));
+    const groups = new Map();
+    for (const v of sim.vehicles) {
+      if (v.stalled || !this.isStuck(v)) continue;
+      let h = v;
+      let cause = null;
+      const seen = new Set([v]);
+      for (let i = 0; i < 20; i++) {
+        const n = h.leaderId ? byId.get(h.leaderId) : null;
+        if (!n || n.gone) {
+          cause = h.waitReason === 'cruce' ? 'cruce' : h.waitReason === 'peaton' ? null : 'via';
+          break;
+        }
+        if (seen.has(n)) {
+          cause = 'ciclo';
+          break;
+        }
+        seen.add(n);
+        if (n.stalled) {
+          h = n;
+          cause = 'varado';
+          break;
+        }
+        if (n.crashed) break; // collision: handled by the collision procedure
+        if (!this.isStuck(n, 0.5)) {
+          // Waiting behind a vehicle at a station: a normal queue, unless it lasts too long.
+          if (n.phase !== 'travel' && (v.blockedFor ?? 0) >= 12) cause = 'estacion';
+          break;
+        }
+        h = n;
+      }
+      if (!cause) continue;
+      const key = h.id;
+      const g = groups.get(key) ?? { head: h, cause, ids: new Set(), wait: 0 };
+      g.ids.add(v.id);
+      if (cause === 'varado' || cause === 'ciclo') g.cause = cause;
+      g.wait = Math.max(g.wait, v.blockedFor ?? 0);
+      groups.set(key, g);
+    }
+    let best = null;
+    for (const g of groups.values()) {
+      const n = g.ids.size + (g.head.stalled ? 1 : 0);
+      const jam = g.cause === 'varado' ? n >= 2 && g.wait >= 1 : (n >= 3 && g.wait >= 3) || (n >= 2 && g.wait >= 4) || g.wait >= 6;
+      if (jam && (!best || n > best.ids.size)) best = g;
+    }
+    if (!best) return null;
+    const vs = [...best.ids].map((id) => byId.get(id)).filter(Boolean);
+    if (best.head.stalled) vs.push(best.head);
+    return { head: best.head, cause: best.cause, vehicles: vs, wait: best.wait };
+  }
+
+  // Longest current wait of a vehicle stopped on a road (min).
+  maxWait() {
+    let m = 0;
+    for (const v of this.sim.vehicles) if (v.phase === 'travel' && !v.crashed && (v.speed ?? 0) < 0.3) m = Math.max(m, v.blockedFor ?? 0);
+    return m;
+  }
+
+  // Level 1: the supervisor (flagman) directs the trucks at the head of the jam.
+  directJam(vehicles) {
+    let n = 0;
+    for (const v of vehicles) {
+      if (v.kind === 'car' || v.stalled) continue;
+      v.flagmanUntil = this.sim.t + 1.5;
+      v.blockedFor = Math.min(v.blockedFor ?? 0, 2);
+      n++;
+    }
+    return n;
+  }
+
+  // Level 2 (or the "Despejar atasco" button): traffic control takes over. Stale crossing
+  // reservations and station lines are released and the stuck vehicles go through one after
+  // another with priority (the highway traffic is held while they merge).
+  forceClear(vehicles) {
+    const sim = this.sim;
+    const ids = new Set(vehicles.map((v) => v.id));
+    for (const [box, owner] of [...this.owner]) {
+      const o = sim.vehicles.find((x) => x.id === owner);
+      if (!o || o.gone || ids.has(owner) || ((o.speed ?? 0) < 0.3 && this.boxAt(o.x, o.z) !== box)) this.owner.delete(box);
+    }
+    this.truckWaiting.clear();
+    for (const k of Object.keys(sim.queues || {})) sim.queues[k] = sim.queues[k].filter((id) => sim.vehicles.some((o) => o.id === id && !o.gone && o.phase === 'request'));
+    // Those leaving the plant first, then the oldest, staggered a little.
+    const order = [...vehicles].filter((v) => !v.stalled && !v.crashed).sort((a, b) => (b.x > PLANT_EDGE_X) - (a.x > PLANT_EDGE_X) || (a.since ?? 0) - (b.since ?? 0));
+    order.forEach((v, i) => {
+      v.jamPriorityUntil = sim.t + 1.2 + i * 0.4;
+      v.forceUntil = sim.t + 1.2 + i * 0.4;
+      v.flagmanUntil = sim.t + 1.2 + i * 0.4;
+      v.blockedFor = 0;
+    });
+    return order.length;
   }
 
   oncomingClear(v, fx, fz) {

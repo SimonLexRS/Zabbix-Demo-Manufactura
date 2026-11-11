@@ -5,12 +5,53 @@
 // grain storage (galpones + silos) and truck yard to the south.
 
 export const SITE = { x0: -64, z0: -140, x1: 60, z1: 130 };
-export const GRID_BOUNDS = { minX: -84, minZ: -184, maxX: 96, maxZ: 184, cell: 2 };
+export const GRID_BOUNDS = { minX: -84, minZ: -184, maxX: 116, maxZ: 184, cell: 2 };
+
+// Everything west of this is inside the plant (the access road and RN4 are outside).
+export const PLANT_EDGE_X = 64;
+
+// RN4: divided highway (two carriageways and a central median). The plant is on the west,
+// so every movement is a right turn; the U-turns (retornos) let trucks change direction.
+//  - southbound carriageway (next to the plant): x 82..90, shoulder lane x 84, driving lane x 87.5
+//  - median: x 90..100, with an opening at each retorno
+//  - northbound carriageway: x 100..108, driving lane x 102.5, shoulder x 106
+export const RN4 = {
+  sX0: 82, sX1: 90, nX0: 100, nX1: 108,
+  sLane: 87.5, sShoulder: 84, nLane: 102.5, nShoulder: 106,
+  medianX: 95, turnR: 7.5,
+  retN: -1, // retorno norte: northbound → southbound (soy trucks coming from the south)
+  retS: 140, // retorno sur: southbound → northbound (trucks leaving towards the north)
+};
+
+// U-turn through a median opening as a list of points (the first one is on the lane the
+// vehicle arrives on, the last one on the opposite carriageway). Each point carries a speed
+// cap so the truck slows down for the turn.
+export function uTurn(which) {
+  const pts = [];
+  const N = 8;
+  const { medianX: cx, turnR: r } = RN4;
+  for (let i = 0; i <= N; i++) {
+    const th = (Math.PI * i) / N;
+    if (which === 'N') pts.push({ x: cx + r * Math.cos(th), z: RN4.retN - r * Math.sin(th), vmax: 4 }); // from x 102.5 heading north to x 87.5 heading south
+    else pts.push({ x: cx - r * Math.cos(th), z: RN4.retS + r * Math.sin(th), vmax: 4 }); // from x 87.5 heading south to x 102.5 heading north
+  }
+  return pts;
+}
+
+// Gate (portería): one barrier per lane of the access road. A truck stops with its front
+// bumper just before the boom, so it never drives through a closed barrier.
+export const GATE_LANES = {
+  in: { z: 69.3, boomX: 66, stopX: 72.5, post: 66.3 }, // inbound (westbound) lane
+  out: { z: 72.7, boomX: 76, stopX: 69.5, post: 75.7 }, // outbound (eastbound) lane
+};
 
 // Truck-drivable rectangles [x0, z0, x1, z1]
 export const ROADS = [
-  { id: 'RN4', rect: [66, -184, 82, 184], highway: true },
-  { id: 'ACCESO', rect: [58, 66, 66, 76] },
+  { id: 'RN4_S', rect: [82, -184, 90, 184], highway: true, dir: 's' },
+  { id: 'RN4_N', rect: [100, -184, 108, 184], highway: true, dir: 'n' },
+  { id: 'RET_N', rect: [90, -10, 100, 1], highway: true, median: true },
+  { id: 'RET_S', rect: [90, 138, 100, 149], highway: true, median: true },
+  { id: 'ACCESO', rect: [58, 66, 82, 76] },
   { id: 'ANILLO_E', rect: [52, -140, 60, 130] },
   { id: 'ANILLO_O', rect: [-64, -140, -56, 130] },
   { id: 'ANILLO_N', rect: [-64, -140, 60, -132] },
@@ -25,21 +66,36 @@ export const ROADS = [
 
 // Truck stops. `cap` = trucks that can use it simultaneously.
 export const STATIONS = {
-  GATE: { id: 'GATE', name: 'Portería / Control de acceso', x: 62, z: 71, cap: 1 },
-  SAMP: { id: 'SAMP', name: 'Calador automático (muestreo)', x: 38, z: 49, cap: 1 },
-  BAL_IN: { id: 'BAL_IN', name: 'Balanza de ingreso (bruto)', x: 24, z: 49, cap: 1 },
+  GATE: { id: 'GATE', name: 'Portería / Control de acceso', x: 71, z: 71, cap: 1 },
+  // Soy reception circuit, one way: C3 westbound (calador → balanza → volcadora 2), ANILLO_O
+  // southbound, C4 eastbound (volcadora 1 → balanza de salida), ANILLO_E northbound to the gate.
+  SAMP: { id: 'SAMP', name: 'Calador automático (muestreo)', x: 4, z: 49, cap: 1 },
+  BAL_IN: { id: 'BAL_IN', name: 'Balanza de ingreso (bruto)', x: -16, z: 49, cap: 1 },
   BAL_OUT: { id: 'BAL_OUT', name: 'Balanza de salida (tara)', x: 38, z: 93, cap: 1 },
-  BAL_D: { id: 'BAL_D', name: 'Balanza de despacho (tara)', x: 26, z: 3, cap: 1 },
-  BAL_DS: { id: 'BAL_DS', name: 'Balanza de despacho (bruto)', x: 56, z: 30, cap: 1 },
+  // Dispatch circuit, one way: ANILLO_E northbound (tara), C2 westbound (carga → bruto),
+  // ANILLO_O southbound, C4 eastbound, ANILLO_E northbound to the gate.
+  BAL_D: { id: 'BAL_D', name: 'Balanza de despacho (tara)', x: 56, z: 30, cap: 1 },
+  BAL_DS: { id: 'BAL_DS', name: 'Balanza de despacho (bruto)', x: -34, z: 3, cap: 1 },
   H1: { id: 'H1', name: 'Volcadora / Tolva 1 (silos)', x: -40, z: 93, cap: 1 },
   H2: { id: 'H2', name: 'Volcadora / Tolva 2 (galpones)', x: -44, z: 49, cap: 1 },
   OL: { id: 'OL', name: 'Carga de aceite (cisternas)', x: 46, z: 3, cap: 1 },
   ML: { id: 'ML', name: 'Carga de harina', x: -14, z: 3, cap: 1 },
 };
 
+// Trucks arrive in the driving lane: soy from the south (northbound), dispatch from the north.
 export const SPAWN = {
-  south: { x: 74, z: 182 },
-  north: { x: 74, z: -182 },
+  south: { x: 102.5, z: 182 },
+  north: { x: 87.5, z: -182 },
+};
+
+// Junctions every route of a circuit goes through (road centres), so trucks follow the
+// circuit in one direction instead of the shortest way.
+export const NODES = {
+  C3_E: { x: 56, z: 49 }, // ANILLO_E × C3
+  C3_W: { x: -60, z: 49 }, // ANILLO_O × C3
+  C2_W: { x: -60, z: 3 }, // ANILLO_O × C2
+  C4_W: { x: -60, z: 93 }, // ANILLO_O × C4
+  C4_E: { x: 56, z: 93 }, // ANILLO_E × C4
 };
 
 // Yard parking slots (trucks wait here for the calador). The back row is staggered so
@@ -103,7 +159,7 @@ export const BUILDINGS = [
   { id: 'N1', type: 'noria', name: 'Noria 1 (elevador de cangilones)', x: -40, z: 102, w: 3, d: 3, h: 34, block: true },
   { id: 'N2', type: 'noria', name: 'Noria 2 (elevador de cangilones)', x: -50, z: 56, w: 3, d: 3, h: 30, block: true },
   { id: 'LAB', type: 'building', name: 'Laboratorio de calidad', x: 46, z: 41, w: 9, d: 7, h: 5, roof: 'white', block: true },
-  { id: 'GAR', type: 'gatehouse', name: 'Portería', x: 62, z: 81, w: 4, d: 5, h: 4, roof: 'white', block: true },
+  { id: 'GAR', type: 'gatehouse', name: 'Portería', x: 71, z: 79.5, w: 4, d: 5, h: 4, roof: 'white', block: true },
 ];
 
 // Monitoring room inside the offices: video wall on the north wall (facing +z), the plant
@@ -117,8 +173,8 @@ export const MONITOR_ROOM = {
 
 // Points of interest for the "Proceso" tour.
 export const TOUR = [
-  { id: 'recepcion', title: '1. Recepción de camiones', desc: 'Ingreso por RN4, portería y playa de espera.', target: [40, 0, 70], dist: 70 },
-  { id: 'calado', title: '2. Calado y pesaje', desc: 'Muestreo (humedad, impurezas) y balanza de ingreso.', target: [30, 0, 49], dist: 45 },
+  { id: 'recepcion', title: '1. Recepción de camiones', desc: 'RN4 en doble vía con retornos, portería con barreras y playa de espera.', target: [62, 0, 60], dist: 95 },
+  { id: 'calado', title: '2. Calado y pesaje', desc: 'Muestreo (humedad, impurezas) y balanza de ingreso.', target: [-6, 0, 49], dist: 45 },
   { id: 'descarga', title: '3. Descarga y acopio', desc: 'Volcadoras, norias, silos y galpones graneleros.', target: [-10, 0, 90], dist: 110 },
   { id: 'prep', title: '4. Preparación', desc: 'Limpieza, quebrado, descascarado, acondicionado y laminado.', target: [10, 0, -70], dist: 70 },
   { id: 'ext', title: '5. Extracción con hexano', desc: 'Extractor, desolventizador-tostador y destilación de miscela.', target: [18, 0, -32], dist: 60 },

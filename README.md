@@ -27,13 +27,15 @@ flowchart LR
 
 ## Proceso simulado
 
-1. Camión de soya llega por RN4 → portería → playa de espera.
-2. **Calador** (humedad, impurezas; ~5 % se rechaza) → **balanza de ingreso**.
-3. **Volcadora/tolva** → noria → silos 1–4 (Tolva 1) o silos 5–7 / galpones (Tolva 2).
-4. **Balanza de salida** (tara) → sale por RN4.
+1. Camión de soya llega por RN4 (doble vía) desde el sur, da la vuelta en el **retorno norte**, espera en la banquina y entra a la portería girando a la derecha → playa de espera.
+2. **Calador** (humedad, impurezas; ~5 % se rechaza) → **balanza de ingreso**, sobre la calle C3 hacia el oeste.
+3. **Volcadora/tolva** → noria → silos 1–4 (Tolva 1, calle C4) o silos 5–7 / galpones (Tolva 2, calle C3).
+4. **Balanza de salida** (tara, calle C4 hacia el este) → portería → sale girando a la derecha y vuelve al norte por el **retorno sur**.
 5. Acopio → silo pulmón → **preparación** → **extractor con hexano** → aceite crudo (~19 %) a tanques, harina (~73 %) al galpón, cascarilla (~6,5 %) a la caldera de biomasa.
 6. **Sala de fuerza**: 2 calderas de 25 t/h. Si falta vapor baja la molienda; si el LEL de hexano supera 25 % el interlock detiene el extractor.
-7. **Despacho**: cisternas de aceite y camiones de harina (balanza de despacho → carga → balanza de salida).
+7. **Despacho**: cisternas de aceite y camiones de harina llegan del norte: **balanza de tara** (anillo este) → **carga** de aceite o harina (calle C2 hacia el oeste) → **balanza bruto** → anillo oeste → calle C4 → portería → salen al sur.
+
+Los circuitos de recepción y despacho son de **un solo sentido**: cada tramo pasa por los cruces del circuito (no por el camino más corto), así los camiones no se cruzan de frente.
 
 ## Endpoints
 
@@ -69,6 +71,7 @@ Botón **Fallas** en la vista 3D (o el panel de cada equipo) con un interruptor 
 | `prep_power` | Corte de energía en preparación | molienda = 0 | Alta |
 | `ol_arm` | Brazo de carga de aceite bloqueado | cisterna detenida | Promedio |
 | `plc_ext_comm` | PLC de extracción sin comunicación | se dejan de enviar sus ítems → `nodata` en Zabbix | Alta |
+| `traffic_jam` | Atasco en vía | un camión queda **varado** y bloquea la vía; se forma la cola detrás. Se despeja reparándolo (mecánico) o con **Despejar atasco** | Alta |
 
 - **Por defecto las fallas se activan a mano** (botón **Fallas**).
 - **Manual**: queda activo en la app y en Zabbix hasta que lo apagues. El técnico va y trabaja en el sitio, pero no la cierra. Para que la cierre, activa *Configuración → Realismo → Los técnicos reparan también las fallas manuales* o define `TECHS_REPAIR_MANUAL=1`.
@@ -133,10 +136,13 @@ Las oficinas (`OFI`) son ahora **"Oficinas y sala de monitoreo"**:
 - **Peatones**: ceden el paso a los operarios que cruzan.
 - **Carriles**: las rutas se alinean al eje de cada camino, así cada sentido circula por su carril; en los cruces el camión espera con el paragolpes en la línea y libera el cruce cuando lo dejó entero.
 - **Sobrepaso**: adelantan por el otro carril solo a un camión estacionado en una estación o averiado; nunca a uno que espera en la misma fila, ni dentro de la playa.
-- **Ingreso**: forman fila en la banquina de RN4 (fuera de los carriles) y entran a la portería de a uno, por el carril de entrada del acceso. Los que salen usan el carril de salida.
-- **Tránsito de paso en RN4**: autos, camionetas y furgonetas de la simulación, por los mismos carriles. Frenan detrás de los camiones y ceden el paso en el acceso a planta. Un camión solo cruza la ruta cuando ningún auto está en el cruce ni demasiado cerca para frenar.
+- **RN4 en doble vía**: dos calzadas separadas por un cantero central, con un **retorno norte** y un **retorno sur**. Como la planta está al oeste, todos los movimientos son giros a la derecha: la soya (viene del sur) usa el retorno norte para entrar y los que salen hacia el norte usan el retorno sur. Nunca se cruza una calzada en circulación.
+- **Ingreso**: forman fila en la banquina de la calzada sur (fuera del carril) y entran a la portería de a uno, por el carril de entrada del acceso. Los que salen usan el carril de salida.
+- **Barreras de portería**: una por carril. El camión se detiene con el paragolpes antes del brazo; la barrera sube cuando termina el control y baja cuando el camión pasó entero. Ningún camión atraviesa una barrera baja.
+- **Tránsito de paso en RN4**: autos, camionetas y furgonetas de la simulación, cada sentido en su calzada. Frenan detrás de los camiones y ceden el paso cuando un camión se incorpora (salida de planta o retorno). El camión solo se incorpora cuando ningún auto está en ese tramo ni demasiado cerca para frenar.
 - **No bloquear el cruce**: nadie entra a un cruce si no tiene lugar para salir de él.
 - **Destrabes**: si se forma un ciclo de espera, sale primero el que se retira de planta. Si un cruce queda trabado, el supervisor hace de señalero.
+- **Atascos**: se detectan solos (vehículos en vía que no avanzan, sin contar la fila normal de una estación) y se resuelven en dos niveles: 1) el supervisor ordena el paso; 2) a los 4 min, control de tránsito libera las reservas de cruce trabadas y da paso con prioridad, de a uno (en RN4 detiene a los autos). Cada atasco activa la falla `traffic_jam` y las métricas `traffic_jam_active`, `traffic_jams_today` y `traffic_jam_max_wait_min`, con su trigger en Zabbix. El botón **Despejar atasco** (portería o camión detenido) fuerza el nivel 2 al instante.
 - **Incidentes viales**: con fallas aleatorias activas, cada pocas horas simuladas (por defecto 8 por día, `ROAD_INCIDENTS` o Configuración → Realismo) falla el freno de un camión o un conductor se distrae.
 - **Colisiones**: un camión sin frenos (falla `brake_fail`) o con el conductor distraído puede chocar. El camión chocado enciende las balizas y pone un triángulo; la vía queda bloqueada hasta que llegan mecánico, técnico de seguridad y **grúa**, y luego los camiones dañados se retiran.
 - **Casi accidentes**: si un camión frena al límite cerca de una persona se registra como casi accidente. Nunca hay atropellos.

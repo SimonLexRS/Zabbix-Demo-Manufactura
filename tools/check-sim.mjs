@@ -20,7 +20,7 @@ for (let i = 0; i < days * 1440 * 5; i++) {
   }
   if (i % (1440 * 5 / 4) === 0) {
     const k = sim.kpis();
-    console.log(sim.clock().label, `veh=${sim.vehicles.length} yard=${k.trucksWaitingYard} road=${k.roadQueue} recv=${k.receivedT.toFixed(0)} crush=${k.crushedT.toFixed(0)} soy%=${k.soyPct.toFixed(1)} oil%=${k.oilPct.toFixed(1)} meal%=${k.mealPct.toFixed(1)} hex=${k.hexane.toFixed(0)} steam=${sim.proc.steam.toFixed(1)} probs=${[...sim.problems.keys()].join(',')}`);
+    console.log(sim.clock().label, `veh=${sim.vehicles.length} yard=${k.trucksWaitingYard} road=${k.roadQueue} recv=${k.receivedT.toFixed(0)} crush=${k.crushedT.toFixed(0)} soy%=${k.soyPct.toFixed(1)} oil%=${k.oilPct.toFixed(1)} meal%=${k.mealPct.toFixed(1)} hex=${k.hexane.toFixed(0)} jams=${k.jams}/${k.jamsCleared} steam=${sim.proc.steam.toFixed(1)} probs=${[...sim.problems.keys()].join(',')}`);
   }
 }
 const snap = JSON.stringify(sim.snapshot());

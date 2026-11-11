@@ -94,6 +94,10 @@ const ui = new UI({
       ui.toast('Siguiendo — arrastra para salir del seguimiento');
     }
     if (a.problem) await setProblem(a.problem, a.active);
+    if (a.clearJam) {
+      const r = await source?.control({ clearJam: true });
+      ui.toast(r?.ok ? 'Despejando el atasco: control de tránsito da paso a los vehículos' : 'No hay un atasco activo');
+    }
   },
 });
 

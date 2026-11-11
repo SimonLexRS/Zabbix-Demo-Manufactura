@@ -56,6 +56,7 @@ export const WORK = {
   plc_ext_comm: { skills: ['instrumentos'], area: 'extraccion', repair: [15, 35], short: 'el PLC de extracción' },
   brake_fail: { skills: ['mecanico'], area: 'transito', repair: [20, 40], short: 'los frenos del camión' },
   vehicle_collision: { skills: ['mecanico', 'seguridad'], area: 'transito', repair: [30, 60], short: 'la colisión', tow: true },
+  traffic_jam: { skills: ['mecanico'], area: 'transito', repair: [10, 25], short: 'el camión varado' },
 };
 
 const STATUS = { abierta: 'Abierta', asignada: 'Asignada', en_camino: 'En camino', en_reparacion: 'En reparación', en_espera: 'Reparada, falta normalizar', resuelta: 'Resuelta', cancelada: 'Cancelada' };
@@ -117,6 +118,11 @@ export class Staff {
   location(id) {
     const sim = this.sim;
     if (id === 'vehicle_collision' && sim.collision) return { x: sim.collision.x, z: sim.collision.z };
+    if (id === 'traffic_jam') {
+      const v = sim.vehicles.find((x) => x.id === sim.stallTruck);
+      if (v) return { x: v.x, z: v.z };
+      return sim.jam ? { x: sim.jam.x, z: sim.jam.z } : { x: 56, z: 71 };
+    }
     if (id === 'brake_fail' || id === 'vehicle_collision') {
       const v = sim.vehicles.find((x) => x.id === sim.brakeTruck);
       if (v) return { x: v.x, z: v.z };
@@ -184,6 +190,8 @@ export class Staff {
     const sim = this.sim;
     for (const [id, a] of sim.active) {
       if (!WORK[id]) continue;
+      // A jam detected on its own is handled by traffic control; a broken-down truck needs a mechanic.
+      if (id === 'traffic_jam' && !sim.stallTruck && !sim.pendingStall) continue;
       if (this.orders.some((o) => o.problem === id && !['resuelta', 'cancelada'].includes(o.status))) continue;
       const w = WORK[id];
       const o = {

@@ -2,7 +2,7 @@
 // with the simulation snapshots (levels, flows, trucks, people, alarms).
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/CSS2DRenderer.js';
-import { STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS, STATIONS } from '../sim/layout.js';
+import { STORAGES, OIL_TANKS, DAY_TANKS, BOILERS, BUILDINGS, STATIONS, GATE_LANES, RN4 } from '../sim/layout.js';
 import * as B from './builders.js';
 import { flowTex, levelColor } from './materials.js';
 import { DashboardWall } from './dashboard.js';
@@ -19,7 +19,7 @@ const STATION_BUILDERS = {
   ML: () => B.loadingRack('meal'),
 };
 // Rotation (radians) so each station lines up with its road.
-const STATION_ROT = { SAMP: Math.PI / 2, BAL_IN: Math.PI / 2, BAL_OUT: Math.PI / 2, BAL_D: Math.PI / 2, H1: Math.PI / 2, H2: Math.PI / 2, OL: -Math.PI / 2, ML: -Math.PI / 2 };
+const STATION_ROT = { SAMP: Math.PI / 2, BAL_IN: Math.PI / 2, BAL_OUT: Math.PI / 2, BAL_D: 0, BAL_DS: Math.PI / 2, H1: Math.PI / 2, H2: Math.PI / 2, OL: -Math.PI / 2, ML: -Math.PI / 2 };
 
 // Where to show an alarm beacon for a problem source.
 function sourcePos(src) {
@@ -292,19 +292,37 @@ export class PlantView {
       this.pick(g, 'station', s.id);
       this.stationObjs[s.id] = g;
     }
-    // Gate barrier arms.
-    const gate = new THREE.Group();
-    B.box(gate, 0.4, 1.2, 0.4, this.M.yellow, 0, 0.6, -5);
-    B.box(gate, 0.15, 0.15, 9, this.M.redWhite, 0, 1.2, -0.5, { cast: false });
-    this.add(gate, 64, 71);
-    this.pick(gate, 'station', 'GATE');
+    // Gate: one barrier per lane of the access road (entry and exit). Each boom pivots on its
+    // post and is raised only when the simulation lets a truck through.
+    this.gateBooms = {};
+    for (const k of ['in', 'out']) {
+      const L = GATE_LANES[k];
+      const gate = new THREE.Group();
+      const dir = Math.sign(L.z - L.post) || 1; // the boom reaches across its lane
+      const len = Math.abs(L.z - L.post) + 2;
+      B.box(gate, 0.45, 1.3, 0.45, this.M.yellow, 0, 0.65, 0);
+      B.box(gate, 0.7, 0.5, 0.9, this.M.yellow, 0, 1.15, -dir * 0.3); // counterweight housing
+      const boom = new THREE.Group();
+      boom.position.set(0, 1.15, 0);
+      B.box(boom, 0.16, 0.16, len, this.M.redWhite, 0, 0, (dir * len) / 2, { cast: false });
+      B.box(boom, 0.12, 0.7, 0.12, this.M.yellow, 0, -0.35, dir * (len - 0.2), { cast: false }); // tip support
+      gate.add(boom);
+      boom.userData.up = -dir * (Math.PI / 2) * 0.96;
+      boom.userData.k = k;
+      this.add(gate, L.boomX, L.post);
+      this.pick(gate, 'station', 'GATE');
+      this.gateBooms[k] = boom;
+    }
+    this.gateOpen = { in: false, out: false };
 
     // Zone labels.
     const zones = [
       ['Oficinas', 26, 12, -112], ['Almacén general', -14, 14, -112], ['Taller', -46, 10, -112], ['Tanques diarios', 43, 12, -115],
       ['Preparación', 18, 24, -72], ['Extracción (hexano)', 18, 30, -38], ['Sala de fuerza', 44, 44, -55],
       ['Galpón harina', -14, 18, -30], ['Galpón cascarilla', -14, 14, -66], ['Silo pulmón', -46, 30, -60],
-      ['Playa de camiones', 36, 6, 70], ['Portería · RN4', 64, 7, 71], ['Laboratorio', 46, 8, 41], ['Ruta Nacional 4', 74, 2, -60],
+      ['Playa de camiones', 36, 6, 70], ['Portería', 71, 7, 66], ['Laboratorio', 46, 8, 41], ['Ruta Nacional 4 (doble vía)', RN4.medianX, 2, -60],
+      ['Retorno norte', RN4.medianX, 3, RN4.retN - 4], ['Retorno sur', RN4.medianX, 3, RN4.retS + 4], ['Calador', 4, 9, 44], ['Balanza de ingreso', -16, 6, 44],
+      ['Balanza de tara (despacho)', 60, 6, 30], ['Balanza bruto (despacho)', -34, 6, -2],
     ];
     for (const [t, x, y, z] of zones) this.label(t, V(x, y, z), 'lbl-zone');
   }
@@ -422,6 +440,7 @@ export class PlantView {
     this.boilersOn = s.boilers.filter((b) => b.on).length;
     this.crushing = crushing;
     this.stationState = s.stations;
+    if (s.gates) this.gateOpen = s.gates;
 
     // Alarm beacons for active problems.
     const want = new Map();
@@ -430,8 +449,9 @@ export class PlantView {
       let pos = sourcePos(p.src);
       if (p.src === 'VIA') {
         const c = s.traffic?.collision;
-        const v = !c && s.vehicles.find((x) => x.brakeFail);
-        pos = c ? new THREE.Vector3(c.x, 14, c.z) : v ? new THREE.Vector3(v.x, 14, v.z) : null;
+        const j = s.traffic?.jam;
+        const v = !c && (s.vehicles.find((x) => x.stalled) || s.vehicles.find((x) => x.brakeFail));
+        pos = c ? new THREE.Vector3(c.x, 14, c.z) : v ? new THREE.Vector3(v.x, 14, v.z) : j ? new THREE.Vector3(j.x, 14, j.z) : null;
       }
       if (!pos) continue;
       const key = p.src;
@@ -613,6 +633,16 @@ export class PlantView {
 
   frame(dt, speed) {
     this.time += dt;
+    // Gate barriers: raise/lower towards the state of the simulation (~1 s at 1x).
+    if (this.gateBooms) {
+      const k = Math.max(1, Math.min(speed || 1, 8));
+      for (const boom of Object.values(this.gateBooms)) {
+        const target = this.gateOpen?.[boom.userData.k] ? boom.userData.up : 0;
+        const d = target - boom.rotation.x;
+        const step = dt * 2.2 * k;
+        boom.rotation.x += Math.abs(d) <= step ? d : Math.sign(d) * step;
+      }
+    }
     // Monitoring room: the roof fades out when looking into the room.
     if (this.room && this.camera) {
       const { g, b } = this.room;
@@ -643,7 +673,7 @@ export class PlantView {
     const blink = Math.sin(this.time * 9) > 0 ? 2.6 : 0;
     for (const g of this.vehicles.values()) {
       const v = g.userData.state;
-      if (v) g.userData.amberMat.emissiveIntensity = v.crashed || v.brakeFail || v.kind === 'tow' ? blink : 0;
+      if (v) g.userData.amberMat.emissiveIntensity = v.crashed || v.brakeFail || v.stalled || v.kind === 'tow' ? blink : 0;
     }
     // People walking animation.
     for (const g of this.people.values()) {

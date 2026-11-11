@@ -971,6 +971,65 @@ zabbix_export:
           tags:
             - tag: 'component'
               value: 'transito'
+        - uuid: '503af93a1f9f4c699e81d5ed3c59f3c5'
+          name: 'Planta: Tránsito: atasco en curso'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_jam_active'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_jam_active'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+          triggers:
+            - uuid: '3d0fbf23ba3b41a2878450167a05e683'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.traffic_jam_active)=1'
+              name: 'Planta: Atasco en vías de la planta o en RN4'
+              priority: 'AVERAGE'
+              description: 'Vehículos detenidos que no avanzan. El supervisor ordena el paso y, si no alcanza, control de tránsito despeja la vía.'
+              tags:
+                - tag: 'area'
+                  value: 'transito'
+                - tag: 'rol'
+                  value: 'sintoma'
+                - tag: 'problema'
+                  value: 'atasco'
+        - uuid: '7cc7ab5cbfca4bd59b973f1d81f98366'
+          name: 'Planta: Tránsito: atascos hoy'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_jams_today'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_jams_today'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+        - uuid: '20ffec3a8bf0448abd720ffb69b000da'
+          name: 'Planta: Tránsito: espera máxima de un vehículo detenido'
+          type: 'DEPENDENT'
+          key: 'planta.traffic_jam_max_wait_min'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.plant.traffic_jam_max_wait_min'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'FLOAT'
+          tags:
+            - tag: 'component'
+              value: 'transito'
+          units: 'm'
         - uuid: 'f5b0b550b5544a61bcac1cc2682d9641'
           name: 'Planta: Mantenimiento: órdenes de trabajo abiertas'
           type: 'DEPENDENT'
@@ -1658,6 +1717,41 @@ zabbix_export:
                   value: 'causa'
                 - tag: 'problema'
                   value: 'vehicle_collision'
+        - uuid: '2a2d5569290a4b939b6cdf4852282122'
+          name: 'Falla: Atasco en vía'
+          type: 'DEPENDENT'
+          key: 'planta.problem[traffic_jam]'
+          delay: '0'
+          preprocessing:
+            - type: 'JSONPATH'
+              parameters:
+                - '$.problem_states.traffic_jam'
+          master_item:
+            key: 'planta.raw'
+          value_type: 'UNSIGNED'
+          valuemap:
+            name: 'Origen de falla'
+          description: 'Un camión queda varado y bloquea la vía: se forma la cola detrás. Se despeja reparándolo o con «Despejar atasco». También se activa sola cuando el tránsito se traba.'
+          tags:
+            - tag: 'component'
+              value: 'fallas'
+            - tag: 'equipo'
+              value: 'VIA'
+          triggers:
+            - uuid: '84f7c614784341eda78b75b98fb05e9e'
+              expression: 'last(/Planta Aceitera Demo by HTTP/planta.problem[traffic_jam])>0'
+              name: 'Atasco en vía ({ITEM.LASTVALUE})'
+              priority: 'HIGH'
+              description: 'Un camión queda varado y bloquea la vía: se forma la cola detrás. Se despeja reparándolo o con «Despejar atasco». También se activa sola cuando el tránsito se traba.'
+              tags:
+                - tag: 'problem'
+                  value: 'traffic_jam'
+                - tag: 'area'
+                  value: 'transito'
+                - tag: 'rol'
+                  value: 'causa'
+                - tag: 'problema'
+                  value: 'traffic_jam'
       discovery_rules:
         - uuid: 'd4bdcabf60134dd3a23f15f16342ba09'
           name: 'Silos y galpones graneleros'

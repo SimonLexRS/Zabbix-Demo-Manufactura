@@ -11,6 +11,7 @@
 //   silo_hotspot  → grain temperature rises in that silo
 //   prep_power    → preparation MCC tripped: crushing stops
 //   plc_comm      → PLC data lost: extraction items stop being sent (nodata in Zabbix)
+//   jam           → a truck breaks down on a road and blocks it (traffic jam behind it)
 
 export const PROBLEMS = [
   { id: 'bal_in_net', name: 'Caída de red en balanza de ingreso', desc: 'El camión queda detenido sobre la balanza y no ingresa nadie más.', sev: 3, src: 'BAL_IN', effect: { type: 'station_down', target: 'BAL_IN' } },
@@ -28,6 +29,7 @@ export const PROBLEMS = [
   { id: 'plc_ext_comm', name: 'PLC de extracción sin comunicación', desc: 'Se dejan de enviar los datos de extracción a Zabbix (nodata).', sev: 3, src: 'EXT', effect: { type: 'plc_comm', target: 'EXT' } },
   { id: 'brake_fail', name: 'Falla de frenos en camión', desc: 'Un camión en marcha pierde los frenos: no se detiene detrás de otros y puede chocar.', sev: 3, src: 'VIA', effect: { type: 'brake_fail', target: 'VIA' } },
   { id: 'vehicle_collision', name: 'Colisión en vía interna', desc: 'Choque entre camiones: la vía queda bloqueada hasta que mantenimiento y la grúa la despejen.', sev: 3, src: 'VIA', effect: { type: 'collision', target: 'VIA' } },
+  { id: 'traffic_jam', name: 'Atasco en vía', desc: 'Un camión queda varado y bloquea la vía: se forma la cola detrás. Se despeja reparándolo o con «Despejar atasco». También se activa sola cuando el tránsito se traba.', sev: 3, src: 'VIA', effect: { type: 'jam', target: 'VIA' } },
 ];
 
 export const PROBLEM_BY_ID = Object.fromEntries(PROBLEMS.map((p) => [p.id, p]));
