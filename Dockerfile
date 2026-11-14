@@ -13,6 +13,7 @@ COPY package.json ./
 COPY server ./server
 COPY js ./js
 COPY css ./css
+COPY image ./image
 COPY index.html favicon.svg ./
 COPY zabbix ./zabbix
 
